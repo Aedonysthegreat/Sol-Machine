@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Race Car Betting Platform</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <main class="page">
+        <header class="top-bar">
+            <div class="boost-timer" id="boostTimer">Next boost in: "x" s</div>
+            <button class="wallet-btn" id="connectWalletBtn">Connect<br>Wallet</button>
+        </header>
+
+        <section class="hero">
+            <h1>Sol Machines logo</h1>
+            <p>The Pit (or something like that)</p>
+        </section>
+
+        <section class="cars-grid">
+            <article class="car-card">
+                <div class="car-image">
+                    <div class="placeholder-box">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                                d="M21 19V5a2 2 0 0 0-2-2H5C3.9 3 3 3.9 3 5v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2zM8.5 11.5l2.5 3.01L14.5 10l4.5 6H5l3.5-4.5zM8 8.5A1.5 1.5 0 1 1 8 5.5a1.5 1.5 0 0 1 0 3z" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="car-label">Car 1</div>
+            </article>
+
+            <article class="car-card">
+                <div class="car-image">
+                    <div class="placeholder-box">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                                d="M21 19V5a2 2 0 0 0-2-2H5C3.9 3 3 3.9 3 5v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2zM8.5 11.5l2.5 3.01L14.5 10l4.5 6H5l3.5-4.5zM8 8.5A1.5 1.5 0 1 1 8 5.5a1.5 1.5 0 0 1 0 3z" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="car-label">Car 2</div>
+            </article>
+
+            <article class="car-card">
+                <div class="car-image">
+                    <div class="placeholder-box">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                                d="M21 19V5a2 2 0 0 0-2-2H5C3.9 3 3 3.9 3 5v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2zM8.5 11.5l2.5 3.01L14.5 10l4.5 6H5l3.5-4.5zM8 8.5A1.5 1.5 0 1 1 8 5.5a1.5 1.5 0 0 1 0 3z" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="car-label">Car 3</div>
+            </article>
+        </section>
+
+        <section class="stats-row">
+            <article class="stats-card" data-car="Car 1">
+                <div class="stats-title">Stats, like win to lose ratio</div>
+                <select class="bet-select car-select">
+                    <option value="">Back car</option>
+                    <option value="X $Boost">X $Boost</option>
+                    <option value="XX $Boost">XX $Boost</option>
+                    <option value="XXX $Boost">XXX $Boost</option>
+                </select>
+                <button class="boost-btn hidden">Boost</button>
+            </article>
+
+            <article class="stats-card" data-car="Car 2">
+                <div class="stats-title">Stats, like win to lose ratio</div>
+                <select class="bet-select car-select">
+                    <option value="">Back car</option>
+                    <option value="X $Boost">X $Boost</option>
+                    <option value="XX $Boost">XX $Boost</option>
+                    <option value="XXX $Boost">XXX $Boost</option>
+                </select>
+                <button class="boost-btn hidden">Boost</button>
+            </article>
+
+            <article class="stats-card" data-car 3="Car 3">
+                <div class="stats-title">Stats, like win to lose ratio</div>
+                <select class="bet-select car-select">
+                    <option value="">Back car</option>
+                    <option value="X $Boost">X $Boost</option>
+                    <option value="XX $Boost">XX $Boost</option>
+                    <option value="XXX $Boost">XXX $Boost</option>
+                </select>
+                <button class="boost-btn hidden">Boost</button>
+            </article>
+        </section>
+
+        <section class="track-preview">
+            <div class="placeholder-box track-placeholder">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                        d="M21 19V5a2 2 0 0 0-2-2H5C3.9 3 3 3.9 3 5v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2zM8.5 11.5l2.5 3.01L14.5 10l4.5 6H5l3.5-4.5zM8 8.5A1.5 1.5 0 1 1 8 5.5a1.5 1.5 0 0 1 0 3z" />
+                </svg>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
