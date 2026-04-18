@@ -21,7 +21,7 @@
 }
 
 body {
-    font-family: 'Rajdhani', sans-serif;
+    font-family: 'Rajdhani', 'Arial Narrow', Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
     line-height: 1.4;
@@ -110,11 +110,15 @@ body {
 }
 
 .car-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     text-align: center;
-    border: 1, 1, var(--accent);
+    gap: 10px;
 }
 
 .car-image {
+    width: 100%;
     position: relative;
     background: var(--card);
     aspect-ratio: 1.2 / 1;
@@ -192,17 +196,16 @@ body {
 
 .car-label {
     font-size: 1.05rem;
-}
-
-.stats-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 32px;
-    margin: 18px 0 14px;
+    text-align: center;
 }
 
 .stats-card {
-    padding: 0 12px;
+    width: 100%;
+    padding: 12px;
+    margin-top: 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
 }
 
 .stats-title {
@@ -318,9 +321,7 @@ body {
 }
 
 @media (max-width: 900px) {
-
-    .cars-grid,
-    .stats-row {
+    .cars-grid {
         grid-template-columns: 1fr;
     }
 
