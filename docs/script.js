@@ -12,7 +12,18 @@ const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Demo wallet string used while testing without real wallet integration.
 // Later this will come from Phantom / Solflare / wallet adapter instead.
-const DEMO_WALLET = "DemoWallet123";
+function getDemoWallet() {
+  let demoWallet = localStorage.getItem("demoWallet");
+
+  if (!demoWallet) {
+    demoWallet = `DemoWallet_${crypto.randomUUID()}`;
+    localStorage.setItem("demoWallet", demoWallet);
+  }
+
+  return demoWallet;
+}
+
+const DEMO_WALLET = getDemoWallet();
 
 /*
   ============================================================

@@ -1,0 +1,11 @@
+git add .
+git commit -m "Updated site"
+git push
+
+
+git add .
+git commit -m "Backend server deployed"
+git push origin main
+
+reset demo wallet run in browsers console and refresh
+localStorage.removeItem("demoWallet");
