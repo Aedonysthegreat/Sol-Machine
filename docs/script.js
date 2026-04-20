@@ -168,7 +168,7 @@ function hideBoostResultModal() {
   clearTimeout(boostToastTimeout);
   boostResultModal.classList.add("hidden");
   boostResultModal.setAttribute("aria-hidden", "true");
-
+}
 
 // Returns the DOM card for a given car ID.
 function getCarCardByCarId(carId) {
@@ -774,5 +774,4 @@ function startBackendPolling() {
 */
 
 // Start polling as soon as the script loads.
-showBoostResultModal("Car 2");
 startBackendPolling();
