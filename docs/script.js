@@ -144,12 +144,19 @@ let shownBoostResultCycleId = null;
   - the winning car is different from the user's car
   - the popup has not already been shown for this cycle
 */
+let boostToastTimeout = null;
+
 function showBoostResultModal(winnerCarId) {
   if (!boostResultModal || !boostResultText) return;
 
-  boostResultText.textContent = `${winnerCarId} won the boost.`;
+  boostResultText.textContent = `${winnerCarId} took the boost this round.`;
   boostResultModal.classList.remove("hidden");
   boostResultModal.setAttribute("aria-hidden", "false");
+
+  clearTimeout(boostToastTimeout);
+  boostToastTimeout = setTimeout(() => {
+    hideBoostResultModal();
+  }, 3500);
 }
 
 /*
@@ -158,9 +165,10 @@ function showBoostResultModal(winnerCarId) {
 function hideBoostResultModal() {
   if (!boostResultModal) return;
 
+  clearTimeout(boostToastTimeout);
   boostResultModal.classList.add("hidden");
   boostResultModal.setAttribute("aria-hidden", "true");
-}
+
 
 // Returns the DOM card for a given car ID.
 function getCarCardByCarId(carId) {

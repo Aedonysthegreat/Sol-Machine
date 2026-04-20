@@ -393,73 +393,77 @@ body {
 }
 
 /* ============================================================
-   BOOST RESULT MODAL
+   BOOST RESULT TOAST
    ============================================================
-   Popup shown when another player's chosen car wins the boost.
+   Smaller non-blocking notification shown when another car wins the boost.
 */
+
 .boost-modal {
     position: fixed;
-    inset: 0;
+    top: 88px;
+    right: 22px;
+    left: auto;
+    bottom: auto;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: rgba(5, 8, 10, 0.72);
-    backdrop-filter: blur(8px);
+    align-items: stretch;
+    justify-content: flex-end;
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
     z-index: 3000;
+    pointer-events: none;
 }
 
-/* Hidden state for the full modal wrapper */
 .boost-modal.hidden {
     display: none;
 }
 
-/* Modal card itself */
 .boost-modal-card {
     position: relative;
-    width: min(100%, 460px);
-    padding: 28px 24px 22px;
+    width: min(92vw, 320px);
+    padding: 16px 16px 14px;
     background: linear-gradient(180deg, rgba(26, 29, 33, 0.98), rgba(17, 19, 21, 0.98));
-    border: 1px solid rgba(0, 240, 255, 0.35);
-    border-radius: 14px;
-    text-align: center;
+    border: 1px solid rgba(0, 240, 255, 0.28);
+    border-radius: 12px;
+    text-align: left;
     overflow: hidden;
     box-shadow:
-        0 0 12px rgba(0, 240, 255, 0.22),
-        0 0 28px rgba(0, 240, 255, 0.14),
-        0 0 48px rgba(196, 77, 255, 0.12);
+        0 0 10px rgba(0, 240, 255, 0.18),
+        0 0 24px rgba(0, 240, 255, 0.10),
+        0 0 30px rgba(196, 77, 255, 0.08);
+    pointer-events: auto;
+    animation: boostToastIn 0.24s ease;
 }
 
-/* Decorative top glow inside the modal */
 .boost-modal-glow {
     position: absolute;
-    inset: -20% auto auto 50%;
-    width: 220px;
-    height: 220px;
+    inset: -35% auto auto 75%;
+    width: 120px;
+    height: 120px;
     transform: translateX(-50%);
-    background: radial-gradient(circle, rgba(0, 240, 255, 0.16) 0%, rgba(0, 240, 255, 0) 70%);
+    background: radial-gradient(circle, rgba(0, 240, 255, 0.14) 0%, rgba(0, 240, 255, 0) 72%);
     pointer-events: none;
 }
 
 .boost-modal-title {
     position: relative;
     font-family: 'Orbitron', sans-serif;
-    font-size: 1.5rem;
-    margin-bottom: 12px;
+    font-size: 1rem;
+    margin-bottom: 6px;
     color: var(--text);
     text-shadow:
-        0 0 6px rgba(0, 240, 255, 0.24),
-        0 0 14px rgba(0, 240, 255, 0.14);
+        0 0 4px rgba(0, 240, 255, 0.18),
+        0 0 10px rgba(0, 240, 255, 0.10);
 }
 
 .boost-modal-text {
     position: relative;
-    font-size: 1.08rem;
-    margin-bottom: 20px;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    margin-bottom: 12px;
     color: var(--text);
 }
 
-/* Modal close button */
 .boost-modal-btn {
     position: relative;
     font-family: 'Orbitron', sans-serif;
@@ -467,16 +471,17 @@ body {
     color: var(--button-text);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 11px 20px;
-    font-size: 0.98rem;
+    padding: 8px 14px;
+    font-size: 0.82rem;
     font-weight: 600;
     cursor: pointer;
-    min-width: 145px;
+    min-width: 96px;
     transition:
         background 0.2s ease,
         border-color 0.2s ease,
         box-shadow 0.2s ease,
-        transform 0.15s ease;
+        transform 0.15s ease,
+        opacity 0.2s ease;
 }
 
 .boost-modal-btn:hover {
@@ -486,8 +491,34 @@ body {
 .boost-modal-btn:active {
     transform: translateY(1px) scale(0.99);
     box-shadow:
-        0 0 4px rgba(0, 240, 255, 0.35),
-        0 0 10px rgba(0, 240, 255, 0.18);
+        0 0 4px rgba(0, 240, 255, 0.28),
+        0 0 8px rgba(0, 240, 255, 0.16);
+}
+
+@keyframes boostToastIn {
+    0% {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.98);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@media (max-width: 560px) {
+    .boost-modal {
+        top: 78px;
+        right: 12px;
+        left: 12px;
+        justify-content: center;
+    }
+
+    .boost-modal-card {
+        width: 100%;
+        max-width: none;
+    }
 }
 
 /* ============================================================
