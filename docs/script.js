@@ -766,4 +766,5 @@ function startBackendPolling() {
 */
 
 // Start polling as soon as the script loads.
+showBoostResultModal("Car 2");
 startBackendPolling();
