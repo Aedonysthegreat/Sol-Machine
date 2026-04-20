@@ -176,6 +176,18 @@ body {
         0 0 14px rgba(0, 240, 255, 0.22);
 }
 
+/* Standalone boost button shown once a car is selected */
+.car-boost-btn {
+    display: block;
+    margin: 4px auto 0;
+}
+
+/* When the card is expanded to single-car view, keep the button nicely centred */
+.cars-grid.single-car-view .car-card:not(.hidden) .car-boost-btn {
+    margin-top: 6px;
+    margin-bottom: 6px;
+}
+
 /*
   Pseudo-elements used for boost flame effects.
   They stay invisible until .boost-active is added by JS.
@@ -265,15 +277,6 @@ body {
 .stats-title {
     font-size: 1rem;
     margin-bottom: 10px;
-}
-
-/* Compact stats area once only the Boost button is left */
-.stats-card.compact {
-    padding: 8px 10px;
-    margin-top: 0;
-    background: transparent;
-    border-color: transparent;
-    box-shadow: none;
 }
 
 /*

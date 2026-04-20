@@ -189,17 +189,32 @@ function clearAllBoostFlames() {
 /*
   applyCarSelectionUI()
 
-  This decides which car card should remain visible.
+  Controls which car card is visible and how that card is laid out.
 
-  Priority:
-  1. lockedCarId
-     The car currently "locked in" visually for this round
+  How it works:
+  - It picks one "active" car using this priority:
+    1. lockedCarId
+       The car currently locked in for the round
+    2. pendingRaceStartCarId
+       The car selected while the backend is still moving from idle -> voting
+    3. selectedCarId
+       The most recent current UI selection
 
-  2. pendingRaceStartCarId
-     The car the user picked while race start is still transitioning
+  UI behaviour:
+  - If there is an active car:
+    - only that car card stays visible
+    - the bet dropdown is hidden
+    - the full stats panel is hidden
+    - the standalone Boost button is shown under the car window
+  - If there is no active car:
+    - all car cards are shown
+    - dropdowns are visible
+    - stats panels are visible
+    - boost buttons are hidden
 
-  3. selectedCarId
-     The immediate current UI selection
+  It also checks how many cards are still visible.
+  If only one remains, it adds the "single-car-view" class to the grid
+  so CSS can enlarge that chosen car window.
 */
 function applyCarSelectionUI() {
   const activeCarId = lockedCarId || pendingRaceStartCarId || selectedCarId;
@@ -209,33 +224,30 @@ function applyCarSelectionUI() {
   allCarCards.forEach((carCard) => {
     const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
-    const statsTitle = carCard.querySelector(".stats-title");
     const statsCard = carCard.querySelector(".stats-card");
 
-    if (!select || !button) return;
+    if (!select || !button || !statsCard) return;
 
     if (activeCarId) {
       if (carCard.dataset.car === activeCarId) {
         carCard.classList.remove("hidden");
+
+        // In selected mode, remove the dropdown and full stats panel.
         select.classList.add("hidden");
+        statsCard.classList.add("hidden");
+
+        // Show the standalone Boost button under the car window.
         button.classList.remove("hidden");
-
-        // Hide stats text once a car has been chosen
-        statsTitle?.classList.add("hidden");
-
-        // Make the stats card more compact when only the boost button remains
-        statsCard?.classList.add("compact");
       } else {
+        // Hide all non-selected car cards.
         carCard.classList.add("hidden");
       }
     } else {
+      // No car selected yet, so restore the full default card layout.
       carCard.classList.remove("hidden");
       select.classList.remove("hidden");
+      statsCard.classList.remove("hidden");
       button.classList.add("hidden");
-
-      // Restore stats area when no car is selected
-      statsTitle?.classList.remove("hidden");
-      statsCard?.classList.remove("compact");
     }
   });
 
@@ -243,18 +255,28 @@ function applyCarSelectionUI() {
     (card) => !card.classList.contains("hidden")
   );
 
+  // If only one card is left visible, switch the grid into enlarged single-car mode.
   carsGrid?.classList.toggle("single-car-view", visibleCards.length === 1);
 }
 
 /*
   renderIdleUI()
 
-  Restores the "start state" UI:
-  - all cars visible
-  - dropdowns visible
-  - boost buttons hidden
+  Resets the car section back to its default pre-race / idle layout.
+
+  What it restores:
+  - removes the enlarged single-car layout
+  - shows all car cards again
+  - shows each stats panel again
+  - shows each bet dropdown again
+  - hides all Boost buttons
+  - resets button state and text
+
+  This is used when the app returns to idle so the user sees the full
+  starting selection screen again rather than the stripped-down chosen-car view.
 */
 function renderIdleUI() {
+  // Return the grid to its normal multi-car layout.
   document.querySelector(".cars-grid")?.classList.remove("single-car-view");
 
   document.querySelectorAll(".car-card").forEach((carCard) => {
@@ -262,17 +284,20 @@ function renderIdleUI() {
 
     const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
-    const statsTitle = carCard.querySelector(".stats-title");
     const statsCard = carCard.querySelector(".stats-card");
 
-    statsTitle?.classList.remove("hidden");
-    statsCard?.classList.remove("compact");
+    // Show the stats panel again in idle mode.
+    if (statsCard) {
+      statsCard.classList.remove("hidden");
+    }
 
+    // Show the dropdown again and reset it to the default option.
     if (select) {
       select.classList.remove("hidden");
       select.value = "";
     }
 
+    // Hide the Boost button and reset its state.
     if (button) {
       button.classList.add("hidden");
       button.disabled = false;
