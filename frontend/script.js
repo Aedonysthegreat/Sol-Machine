@@ -8,7 +8,7 @@
 
 // Base URL for your backend API.
 // Later, this can be swapped to your real hosted backend.
-const API_BASE = "sol-machine-production.up.railway.app";
+const API_BASE = "https://sol-machine-production.up.railway.app";
 
 // Demo wallet string used while testing without real wallet integration.
 // Later this will come from Phantom / Solflare / wallet adapter instead.
