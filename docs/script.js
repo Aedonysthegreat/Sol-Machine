@@ -352,11 +352,8 @@ async function syncFromBackend() {
     document.querySelector(".page")?.classList.add("ready");
   } catch (error) {
     console.error("Backend sync failed:", error);
-
-    // Only replace timer text if this was the newest request.
-    if (requestId === syncRequestCounter) {
-      boostTimer.textContent = "Connection issue";
-    }
+    boostTimer.textContent = "Connection issue";
+    document.querySelector(".page")?.classList.add("ready");
   }
 }
 
