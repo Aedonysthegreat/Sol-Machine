@@ -82,6 +82,10 @@ app.use(
 // This helps avoid people sending huge payloads.
 app.use(express.json({ limit: "32kb" }));
 
+app.get("/healthz", (req, res) => {
+  res.status(200).json({ ok: true });
+});
+
 /*
   ------------------------------------------------------------
   SMALL DATE/TIME HELPERS
