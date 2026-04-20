@@ -267,6 +267,15 @@ body {
     margin-bottom: 10px;
 }
 
+/* Compact stats area once only the Boost button is left */
+.stats-card.compact {
+    padding: 8px 10px;
+    margin-top: 0;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
 /*
   Dropdown for selecting boost amount / backing the car.
 */

@@ -209,6 +209,8 @@ function applyCarSelectionUI() {
   allCarCards.forEach((carCard) => {
     const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
+    const statsTitle = carCard.querySelector(".stats-title");
+    const statsCard = carCard.querySelector(".stats-card");
 
     if (!select || !button) return;
 
@@ -217,6 +219,12 @@ function applyCarSelectionUI() {
         carCard.classList.remove("hidden");
         select.classList.add("hidden");
         button.classList.remove("hidden");
+
+        // Hide stats text once a car has been chosen
+        statsTitle?.classList.add("hidden");
+
+        // Make the stats card more compact when only the boost button remains
+        statsCard?.classList.add("compact");
       } else {
         carCard.classList.add("hidden");
       }
@@ -224,6 +232,10 @@ function applyCarSelectionUI() {
       carCard.classList.remove("hidden");
       select.classList.remove("hidden");
       button.classList.add("hidden");
+
+      // Restore stats area when no car is selected
+      statsTitle?.classList.remove("hidden");
+      statsCard?.classList.remove("compact");
     }
   });
 
@@ -243,12 +255,18 @@ function applyCarSelectionUI() {
   - boost buttons hidden
 */
 function renderIdleUI() {
+  document.querySelector(".cars-grid")?.classList.remove("single-car-view");
+
   document.querySelectorAll(".car-card").forEach((carCard) => {
-    document.querySelector(".cars-grid")?.classList.remove("single-car-view");
     carCard.classList.remove("hidden");
 
     const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
+    const statsTitle = carCard.querySelector(".stats-title");
+    const statsCard = carCard.querySelector(".stats-card");
+
+    statsTitle?.classList.remove("hidden");
+    statsCard?.classList.remove("compact");
 
     if (select) {
       select.classList.remove("hidden");
