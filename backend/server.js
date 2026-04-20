@@ -82,6 +82,10 @@ app.use(
 // This helps avoid people sending huge payloads.
 app.use(express.json({ limit: "32kb" }));
 
+app.get("/", (req, res) => {
+  res.status(200).json({ ok: true, message: "Sol Machine backend is running" });
+});
+
 app.get("/healthz", (req, res) => {
   res.status(200).json({ ok: true });
 });
@@ -701,6 +705,6 @@ app.post("/api/admin/reset-race", requireAdmin, (req, res) => {
   ------------------------------------------------------------
 */
 
-app.listen(PORT, () => {
-  console.log(`Sol Machine backend running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Sol Machine backend running on host 0.0.0.0 port ${PORT}`);
 });
