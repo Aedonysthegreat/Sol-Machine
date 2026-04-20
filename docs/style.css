@@ -370,7 +370,7 @@ body {
 
 /* Make the visible card wider */
 .cars-grid.single-car-view .car-card:not(.hidden) {
-    width: min(100%, 920px);
+    width: min(100%, 600px);
     margin: 0 auto;
 }
 
