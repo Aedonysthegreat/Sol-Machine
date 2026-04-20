@@ -204,6 +204,7 @@ function clearAllBoostFlames() {
 function applyCarSelectionUI() {
   const activeCarId = lockedCarId || pendingRaceStartCarId || selectedCarId;
   const allCarCards = document.querySelectorAll(".car-card");
+  const carsGrid = document.querySelector(".cars-grid");
 
   allCarCards.forEach((carCard) => {
     const select = carCard.querySelector(".car-select");
@@ -212,7 +213,6 @@ function applyCarSelectionUI() {
     if (!select || !button) return;
 
     if (activeCarId) {
-      // Show only the selected/locked car
       if (carCard.dataset.car === activeCarId) {
         carCard.classList.remove("hidden");
         select.classList.add("hidden");
@@ -221,12 +221,17 @@ function applyCarSelectionUI() {
         carCard.classList.add("hidden");
       }
     } else {
-      // No selected car yet -> show full selection UI
       carCard.classList.remove("hidden");
       select.classList.remove("hidden");
       button.classList.add("hidden");
     }
   });
+
+  const visibleCards = Array.from(allCarCards).filter(
+    (card) => !card.classList.contains("hidden")
+  );
+
+  carsGrid?.classList.toggle("single-car-view", visibleCards.length === 1);
 }
 
 /*
@@ -239,6 +244,7 @@ function applyCarSelectionUI() {
 */
 function renderIdleUI() {
   document.querySelectorAll(".car-card").forEach((carCard) => {
+    document.querySelector(".cars-grid")?.classList.remove("single-car-view");
     carCard.classList.remove("hidden");
 
     const select = carCard.querySelector(".car-select");

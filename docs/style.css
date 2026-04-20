@@ -348,6 +348,76 @@ body {
     transform: none;
 }
 
+/* Smooth transition when the layout changes */
+.cars-grid,
+.car-card,
+.car-image,
+.stats-card {
+    transition:
+        grid-template-columns 0.3s ease,
+        width 0.3s ease,
+        max-width 0.3s ease,
+        aspect-ratio 0.3s ease,
+        min-height 0.3s ease,
+        box-shadow 0.3s ease;
+}
+
+/* When only one car is being shown */
+.cars-grid.single-car-view {
+    grid-template-columns: 1fr;
+    justify-items: center;
+}
+
+/* Make the visible card wider */
+.cars-grid.single-car-view .car-card:not(.hidden) {
+    width: min(100%, 920px);
+    margin: 0 auto;
+}
+
+/* Make the chosen car window much larger */
+.cars-grid.single-car-view .car-card:not(.hidden) .car-image {
+    aspect-ratio: 1.85 / 1;
+    min-height: 360px;
+    margin-bottom: 18px;
+    box-shadow:
+        0 0 10px rgba(0, 240, 255, 0.65),
+        0 0 24px rgba(0, 240, 255, 0.28),
+        0 0 40px rgba(0, 240, 255, 0.14);
+}
+
+/* Scale the placeholder/feed content up too */
+.cars-grid.single-car-view .car-card:not(.hidden) .placeholder-box {
+    width: 180px;
+    height: 180px;
+}
+
+.cars-grid.single-car-view .car-card:not(.hidden) .placeholder-box svg {
+    width: 96px;
+    height: 96px;
+}
+
+/* Keep the stats panel tidy under the larger window */
+.cars-grid.single-car-view .car-card:not(.hidden) .stats-card {
+    max-width: 420px;
+    margin: 0 auto;
+}
+
+@media (max-width: 900px) {
+    .cars-grid.single-car-view .car-card:not(.hidden) {
+        width: 100%;
+    }
+
+    .cars-grid.single-car-view .car-card:not(.hidden) .car-image {
+        aspect-ratio: 1.4 / 1;
+        min-height: 260px;
+    }
+
+    .cars-grid.single-car-view .car-card:not(.hidden) .placeholder-box {
+        width: 140px;
+        height: 140px;
+    }
+}
+
 /* ============================================================
    TRACK PREVIEW
    ============================================================
