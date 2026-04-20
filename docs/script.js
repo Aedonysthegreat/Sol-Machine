@@ -7,11 +7,22 @@
 */
 
 // Base URL for your backend API.
-// Later, this can be swapped to your real hosted backend.
+// This should point at your live backend, including the /api prefix,
+// because all backend routes are under /api/...
 const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
-// Demo wallet string used while testing without real wallet integration.
-// Later this will come from Phantom / Solflare / wallet adapter instead.
+/*
+  Demo wallet helper.
+
+  While real Solana wallet connection is not implemented yet,
+  each browser/device gets its own generated demo wallet ID.
+
+  Why this matters:
+  - if the wallet were hardcoded, phone + laptop would look like
+    the same player to the backend
+  - storing it in localStorage means each device keeps its own
+    stable demo identity between refreshes
+*/
 function getDemoWallet() {
   let demoWallet = localStorage.getItem("demoWallet");
 
@@ -23,6 +34,7 @@ function getDemoWallet() {
   return demoWallet;
 }
 
+// The current demo wallet used by this device/browser.
 const DEMO_WALLET = getDemoWallet();
 
 /*
@@ -41,6 +53,22 @@ const connectWalletBtn = document.getElementById("connectWalletBtn");
 // These are queried once on load because the page structure is static.
 const carSelects = document.querySelectorAll(".car-select");
 const boostButtons = document.querySelectorAll(".boost-btn");
+
+/*
+  Modal elements used for the "you did not win the boost" popup.
+
+  boostResultModal:
+    the dark full-screen overlay
+
+  boostResultText:
+    the text node inside the modal that gets updated with the winner
+
+  closeBoostResultModalBtn:
+    the button used to dismiss the popup
+*/
+const boostResultModal = document.getElementById("boostResultModal");
+const boostResultText = document.getElementById("boostResultText");
+const closeBoostResultModalBtn = document.getElementById("closeBoostResultModal");
 
 /*
   ============================================================
@@ -95,10 +123,44 @@ let isStartingRace = false;
 let hasInitialSync = false;
 
 /*
+  Tracks which cycle has already shown the "lost boost" popup.
+
+  This prevents the modal from repeatedly reopening every time
+  renderStateFromBackend() runs during the same boost cycle.
+*/
+let shownBoostResultCycleId = null;
+
+/*
   ============================================================
   UI HELPERS
   ============================================================
 */
+
+/*
+  Shows the styled result modal when another car wins the boost.
+
+  This is only meant to appear if:
+  - the user had selected a car
+  - the winning car is different from the user's car
+  - the popup has not already been shown for this cycle
+*/
+function showBoostResultModal(winnerCarId) {
+  if (!boostResultModal || !boostResultText) return;
+
+  boostResultText.textContent = `${winnerCarId} won the boost.`;
+  boostResultModal.classList.remove("hidden");
+  boostResultModal.setAttribute("aria-hidden", "false");
+}
+
+/*
+  Hides the modal and restores it to its hidden state.
+*/
+function hideBoostResultModal() {
+  if (!boostResultModal) return;
+
+  boostResultModal.classList.add("hidden");
+  boostResultModal.setAttribute("aria-hidden", "true");
+}
 
 // Returns the DOM card for a given car ID.
 function getCarCardByCarId(carId) {
@@ -194,6 +256,8 @@ function renderIdleUI() {
 
   Clears all round-specific frontend state.
   Called only when a race has actually returned to idle after running.
+
+  Also closes the result modal so it does not hang around between rounds.
 */
 function resetRaceSelection() {
   selectedCarId = null;
@@ -203,6 +267,9 @@ function resetRaceSelection() {
   votedCycleId = null;
   isSubmittingVote = false;
   submittingVoteCycleId = null;
+  shownBoostResultCycleId = null;
+
+  hideBoostResultModal();
 
   localStorage.removeItem("lockedCarId");
   localStorage.removeItem("votedCycleId");
@@ -484,7 +551,7 @@ function renderStateFromBackend() {
       button.textContent = "Boosting...";
     });
 
-    // Apply visual flame effect to winning car.
+    // Add the flame effect to the winning car's video/image box.
     if (currentWinnerCarId) {
       const winningCard = getCarCardByCarId(currentWinnerCarId);
       const winningImage = winningCard?.querySelector(".car-image");
@@ -492,6 +559,26 @@ function renderStateFromBackend() {
       if (winningImage) {
         winningImage.classList.add("boost-active");
       }
+    }
+
+    // Work out which car this user currently had selected.
+    const userCarId = lockedCarId || selectedCarId;
+
+    /*
+      Show the result modal only if:
+      - there is a winner
+      - the user had chosen a car
+      - the winning car is NOT the user's car
+      - the popup has not already been shown for this cycle
+    */
+    if (
+      currentWinnerCarId &&
+      userCarId &&
+      currentWinnerCarId !== userCarId &&
+      shownBoostResultCycleId !== currentCycleId
+    ) {
+      shownBoostResultCycleId = currentCycleId;
+      showBoostResultModal(currentWinnerCarId);
     }
   }
 
@@ -639,6 +726,19 @@ boostButtons.forEach((button) => {
 */
 connectWalletBtn.addEventListener("click", () => {
   alert("Wallet connection will go here.");
+});
+
+/*
+  Modal close handlers:
+  - clicking the close button hides the popup
+  - clicking the dark overlay outside the modal card also hides it
+*/
+closeBoostResultModalBtn?.addEventListener("click", hideBoostResultModal);
+
+boostResultModal?.addEventListener("click", (event) => {
+  if (event.target === boostResultModal) {
+    hideBoostResultModal();
+  }
 });
 
 /*
