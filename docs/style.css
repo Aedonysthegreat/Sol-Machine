@@ -629,6 +629,11 @@ body {
     .track-preview {
         min-height: 260px;
     }
+
+    /* Stop the selected car from enlarging on mobile */
+    .cars-grid.single-car-view .car-card:not(.hidden) {
+        width: 100%;
+    }
 }
 
 /* Small mobile screens */

@@ -4,7 +4,7 @@ git push
 
 
 git add .
-git commit -m "Backend server deployed"
+git commit -m "Mobile car-view fix"
 git push origin main
 
 reset demo wallet run in browsers console and refresh
