@@ -634,6 +634,21 @@ body {
     .cars-grid.single-car-view .car-card:not(.hidden) {
         width: 100%;
     }
+
+    .cars-grid.single-car-view .car-card:not(.hidden) .car-image {
+        aspect-ratio: 1.2 / 1;
+        min-height: 0;
+    }
+
+    .cars-grid.single-car-view .car-card:not(.hidden) .placeholder-box {
+        width: 120px;
+        height: 120px;
+    }
+
+    .cars-grid.single-car-view .car-card:not(.hidden) .placeholder-box svg {
+        width: 72px;
+        height: 72px;
+    }
 }
 
 /* Small mobile screens */
