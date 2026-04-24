@@ -199,30 +199,16 @@ function clearAllBoostFlames() {
 
   Controls which car card is visible and how that card is laid out.
 
-  How it works:
-  - It picks one "active" car using this priority:
-    1. lockedCarId
-       The car currently locked in for the round
-    2. pendingRaceStartCarId
-       The car selected while the backend is still moving from idle -> voting
-    3. selectedCarId
-       The most recent current UI selection
-
-  UI behaviour:
-  - If there is an active car:
-    - only that car card stays visible
-    - the bet dropdown is hidden
-    - the full stats panel is hidden
-    - the standalone Boost button is shown under the car window
-  - If there is no active car:
-    - all car cards are shown
-    - dropdowns are visible
-    - stats panels are visible
-    - boost buttons are hidden
-
-  It also checks how many cards are still visible.
-  If only one remains, it adds the "single-car-view" class to the grid
-  so CSS can enlarge that chosen car window.
+  Important state behaviour:
+  - idle:
+      keep selected car visible after a confirmed bet,
+      but do NOT show the Boost button yet
+  - starting:
+      show the Boost button, but disable it while the race countdown runs
+  - voting:
+      show the Boost button so the user can vote for the boost
+  - finalizing/boost:
+      show the button, but renderStateFromBackend() disables it
 */
 function applyCarSelectionUI() {
   const activeCarId = lockedCarId || pendingRaceStartCarId || selectedCarId;
@@ -240,14 +226,41 @@ function applyCarSelectionUI() {
       if (carCard.dataset.car === activeCarId) {
         carCard.classList.remove("hidden");
 
-        // In selected mode, remove the dropdown and full stats panel.
+        // Once a car is selected/bet on, hide the bet controls and stats panel.
         select.classList.add("hidden");
         statsCard.classList.add("hidden");
 
-        // Show the standalone Boost button under the car window.
-        button.classList.remove("hidden");
+        /*
+          Idle behaviour:
+          The user has selected/bet on a car, but the race has not started.
+          Keep the chosen car view visible, but do not show Boost yet.
+        */
+        if (currentState === "idle") {
+          button.classList.add("hidden");
+          button.disabled = true;
+          button.textContent = "Boost";
+        }
+
+        /*
+          Starting behaviour:
+          Race countdown is running.
+          Show the button location so the layout is stable, but block clicking.
+        */
+        else if (currentState === "starting") {
+          button.classList.remove("hidden");
+          button.disabled = true;
+          button.textContent = "Boost Locked";
+        }
+
+        /*
+          Active race behaviour:
+          Show the button. The exact enabled/disabled text is handled later
+          in renderStateFromBackend() depending on voting/finalizing/boost.
+        */
+        else {
+          button.classList.remove("hidden");
+        }
       } else {
-        // Hide all non-selected car cards.
         carCard.classList.add("hidden");
       }
     } else {
@@ -255,9 +268,19 @@ function applyCarSelectionUI() {
       carCard.classList.remove("hidden");
       select.classList.remove("hidden");
       statsCard.classList.remove("hidden");
+
       button.classList.add("hidden");
+      button.disabled = false;
+      button.textContent = "Boost";
     }
   });
+
+  const visibleCards = Array.from(allCarCards).filter(
+    (card) => !card.classList.contains("hidden")
+  );
+
+  carsGrid?.classList.toggle("single-car-view", visibleCards.length === 1);
+}
 
   const visibleCards = Array.from(allCarCards).filter(
     (card) => !card.classList.contains("hidden")
@@ -691,6 +714,11 @@ function renderStateFromBackend() {
       startRaceBtn.disabled = true;
       startRaceBtn.textContent = "Race Starting";
     }
+
+    document.querySelectorAll(".boost-btn").forEach((button) => {
+      button.disabled = true;
+      button.textContent = "Boost Locked";
+    });
 
     startCountdownToEndsAt();
     return;
