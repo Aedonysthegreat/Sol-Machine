@@ -626,39 +626,66 @@ function startCountdownToEndsAt() {
   renderStateFromBackend()
 
   Main UI renderer based on backend cycle state.
+
+  Important:
+  - idle no longer always means "reset the UI"
+  - if the user has already submitted a bet in the current idle race,
+    we keep the chosen car locked on screen while waiting for Start Race
 */
 function renderStateFromBackend() {
   clearAllBoostFlames();
+
+  const hasLockedBetView =
+    currentBetStatus === "confirmed" ||
+    currentBetId !== null ||
+    lockedCarId !== null ||
+    selectedCarId !== null;
 
   // ----------------------------------------------------------
   // IDLE
   // ----------------------------------------------------------
   if (currentState === "idle") {
-    // If user has chosen a car and race start is still in progress,
-    // keep showing that car instead of jumping back to select state.
-    if (isStartingRace && (pendingRaceStartCarId || selectedCarId || lockedCarId)) {
-      applyCarSelectionUI();
-      boostTimer.textContent = "Starting race...";
-      return;
-    }
-
-    // Only clear round state if we actually returned from an active race.
-    if (previousState && previousState !== "idle") {
-      resetRaceSelection();
-    }
-
     if (startRaceBtn) {
       startRaceBtn.disabled = false;
       startRaceBtn.textContent = "Start Race";
+    }
+
+    /*
+      If we just came back from an active race, reset everything.
+      This is the true end-of-race reset.
+    */
+    if (previousState && previousState !== "idle") {
+      resetRaceSelection();
+      renderIdleUI();
+      return;
+    }
+
+    /*
+      If the user has already placed a bet while the race is still idle,
+      keep the selected car view instead of resetting back to the dropdowns.
+    */
+    if (hasLockedBetView) {
+      applyCarSelectionUI();
+
+      if (currentBetStatus === "confirmed") {
+        boostTimer.textContent = "Bet submitted. Waiting for race start.";
+      } else {
+        boostTimer.textContent = "Select a car to start the race";
+      }
+
+      return;
     }
 
     renderIdleUI();
     return;
   }
 
-  // Non-idle states always show the selected/locked car UI.
+  // Non-idle states should keep the selected/locked car UI.
   applyCarSelectionUI();
 
+  // ----------------------------------------------------------
+  // STARTING
+  // ----------------------------------------------------------
   if (currentState === "starting") {
     if (startRaceBtn) {
       startRaceBtn.disabled = true;
@@ -676,11 +703,15 @@ function renderStateFromBackend() {
   // VOTING
   // ----------------------------------------------------------
   if (currentState === "voting") {
+    if (startRaceBtn) {
+      startRaceBtn.disabled = true;
+      startRaceBtn.textContent = "Race Active";
+    }
+
     allCarCards.forEach((carCard) => {
       const button = carCard.querySelector(".boost-btn");
       if (!button) return;
 
-      // Only the active car should be interactable.
       if (!activeCarId || carCard.dataset.car === activeCarId) {
         if (isSubmittingVote && submittingVoteCycleId === currentCycleId) {
           button.disabled = true;
@@ -696,15 +727,15 @@ function renderStateFromBackend() {
     });
   }
 
-  if (startRaceBtn) {
-    startRaceBtn.disabled = true;
-    startRaceBtn.textContent = "Race Active";
-  }
-
   // ----------------------------------------------------------
   // FINALIZING
   // ----------------------------------------------------------
   if (currentState === "finalizing") {
+    if (startRaceBtn) {
+      startRaceBtn.disabled = true;
+      startRaceBtn.textContent = "Race Active";
+    }
+
     allCarCards.forEach((carCard) => {
       const button = carCard.querySelector(".boost-btn");
       if (!button) return;
@@ -718,6 +749,11 @@ function renderStateFromBackend() {
   // BOOST
   // ----------------------------------------------------------
   if (currentState === "boost") {
+    if (startRaceBtn) {
+      startRaceBtn.disabled = true;
+      startRaceBtn.textContent = "Race Active";
+    }
+
     allCarCards.forEach((carCard) => {
       const button = carCard.querySelector(".boost-btn");
       if (!button) return;
@@ -726,7 +762,6 @@ function renderStateFromBackend() {
       button.textContent = "Boosting...";
     });
 
-    // Add the flame effect to the winning car's video/image box.
     if (currentWinnerCarId) {
       const winningCard = getCarCardByCarId(currentWinnerCarId);
       const winningImage = winningCard?.querySelector(".car-image");
@@ -736,16 +771,8 @@ function renderStateFromBackend() {
       }
     }
 
-    // Work out which car this user currently had selected.
     const userCarId = lockedCarId || selectedCarId;
 
-    /*
-      Show the result modal only if:
-      - there is a winner
-      - the user had chosen a car
-      - the winning car is NOT the user's car
-      - the popup has not already been shown for this cycle
-    */
     if (
       currentWinnerCarId &&
       userCarId &&
@@ -756,6 +783,9 @@ function renderStateFromBackend() {
       showBoostResultModal(currentWinnerCarId);
     }
   }
+
+  // Keep the timer running for voting/finalizing/boost.
+  startCountdownToEndsAt();
 }
 
 /*
@@ -763,8 +793,6 @@ function renderStateFromBackend() {
   EVENT HANDLERS
   ============================================================
 */
-
-startCountdownToEndsAt()
 
 /*
   CAR / BET SELECTION
@@ -788,17 +816,17 @@ carSelects.forEach((select) => {
 
     /*
       The option values are currently:
-      "X $Boost"
-      "XX $Boost"
-      "XXX $Boost"
+      "1 $Boost"
+      "5 $Boost"
+      "10 $Boost"
 
       For v1 we map those to preset backend stake amounts.
       You can rename these later to "1 Token", "5 Tokens", etc.
     */
     const stakeAmountByOption = {
-      "X $Boost": 1,
-      "XX $Boost": 5,
-      "XXX $Boost": 10
+      "1 $Boost": 1,
+      "5 $Boost": 5,
+      "10 $Boost": 10
     };
 
     const stakeAmount = stakeAmountByOption[chosenValue];
@@ -857,6 +885,46 @@ carSelects.forEach((select) => {
       alert(error.message);
     }
   });
+});
+
+/*
+  START RACE BUTTON
+
+  Starts the shared backend-owned 20-second countdown.
+
+  Betting stays open during "starting".
+  Betting locks once backend moves to "voting".
+*/
+startRaceBtn?.addEventListener("click", async () => {
+  try {
+    if (!hasInitialSync || currentState === null) {
+      await syncFromBackend();
+    }
+
+    if (currentState !== "idle") {
+      alert("Race countdown has already started or race is active");
+      return;
+    }
+
+    startRaceBtn.disabled = true;
+    startRaceBtn.textContent = "Starting...";
+
+    const raceStartData = await startRace();
+
+    applyCycleFromBackend(raceStartData.cycle);
+    renderStateFromBackend();
+
+    await syncFromBackend();
+  } catch (error) {
+    console.error(error);
+
+    if (startRaceBtn) {
+      startRaceBtn.disabled = false;
+      startRaceBtn.textContent = "Start Race";
+    }
+
+    alert(error.message);
+  }
 });
 
 /*
