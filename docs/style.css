@@ -81,6 +81,53 @@ body {
     box-shadow: 0 0 12px rgba(0, 240, 255, 0.12);
 }
 
+/* Holds the Start Race and Connect Wallet buttons together */
+.top-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* Start Race button uses same visual language as the wallet/boost buttons */
+.start-race-btn {
+    font-family: 'Orbitron', sans-serif;
+    background: var(--button);
+    color: var(--button-text);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    min-width: 130px;
+    margin-bottom: 10px;
+    transition:
+        background 0.2s ease,
+        border-color 0.2s ease,
+        box-shadow 0.2s ease,
+        transform 0.15s ease,
+        opacity 0.2s ease;
+}
+
+.start-race-btn:hover {
+    opacity: 0.92;
+    box-shadow:
+        0 0 4px rgba(0, 240, 255, 0.4),
+        0 0 10px rgba(0, 240, 255, 0.18);
+}
+
+.start-race-btn:active {
+    transform: translateY(1px) scale(0.99);
+}
+
+.start-race-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    border-color: #3A3F44;
+    box-shadow: none;
+    transform: none;
+}
+
 .boost-timer {
     font-size: 1.9rem;
     font-weight: 500;
@@ -649,6 +696,11 @@ body {
         width: 72px;
         height: 72px;
     }
+
+    .top-actions {
+        width: 100%;
+        justify-content: space-between;
+    }
 }
 
 /* Small mobile screens */
@@ -665,6 +717,16 @@ body {
     .boost-btn {
         font-size: 1rem;
         padding: 12px 18px;
+    }
+
+    .top-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .start-race-btn,
+    .wallet-btn {
+        width: 100%;
     }
 }
 

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS cycles (
   cycle_number INTEGER NOT NULL,
 
   -- Restrict state values so bad data cannot be inserted accidentally.
-  state TEXT NOT NULL CHECK (state IN ('idle', 'voting', 'finalizing', 'boost')),
+  state TEXT NOT NULL CHECK (state IN ('idle', 'starting', 'voting', 'finalizing', 'boost')),
 
   started_at TEXT NOT NULL,
   ends_at TEXT NOT NULL,
@@ -108,6 +108,81 @@ CREATE TABLE IF NOT EXISTS votes (
 
   FOREIGN KEY (cycle_id) REFERENCES cycles(id)
 );
+
+-- ============================================================
+-- bets
+-- ============================================================
+-- Stores one betting record per wallet per race.
+--
+-- Design rules for v1:
+-- - one wallet can only place one bet per race
+-- - one bet is tied to one chosen car
+-- - stake amount must be one of the allowed preset amounts
+-- - payment is verified later when the bet is submitted
+--
+-- status meanings:
+-- - pending_payment = bet intent created, waiting for payment verification
+-- - confirmed       = bet accepted into the race
+-- - won             = race completed and this bet won
+-- - lost            = race completed and this bet lost
+-- - refunded        = race cancelled/invalid and refund issued
+-- - void            = bet invalidated before normal settlement
+
+CREATE TABLE IF NOT EXISTS bets (
+  id TEXT PRIMARY KEY,
+
+  -- Which race this bet belongs to.
+  race_id INTEGER NOT NULL,
+
+  -- The cycle row that existed when the bet was created.
+  -- For your current setup this will likely be the idle/pre-race cycle.
+  cycle_id INTEGER NOT NULL,
+
+  -- Wallet that placed the bet.
+  wallet TEXT NOT NULL,
+
+  -- Car chosen for the bet.
+  car_id TEXT NOT NULL,
+
+  -- Token used for the bet.
+  token_symbol TEXT NOT NULL,
+
+  -- Stake amount chosen from your preset bet sizes.
+  stake_amount INTEGER NOT NULL,
+
+  -- Fixed payout multiplier stored at bet creation time.
+  payout_multiplier REAL NOT NULL,
+
+  -- Precomputed possible return if the bet wins.
+  potential_payout INTEGER NOT NULL,
+
+  -- Current bet lifecycle state.
+  status TEXT NOT NULL CHECK (
+    status IN ('pending_payment', 'confirmed', 'won', 'lost', 'refunded', 'void')
+  ),
+
+  -- Payment proof fields.
+  payment_tx_signature TEXT UNIQUE,
+  message_signature TEXT,
+
+  -- Timestamps for creation and later settlement/refund.
+  created_at TEXT NOT NULL,
+  settled_at TEXT,
+  refunded_at TEXT,
+
+  FOREIGN KEY (cycle_id) REFERENCES cycles(id),
+
+  -- Hard stop: one wallet can only place one bet per race.
+  UNIQUE (race_id, wallet)
+);
+
+-- Useful for fetching bets during settlement.
+CREATE INDEX IF NOT EXISTS idx_bets_race_status
+  ON bets (race_id, status);
+
+-- Useful for wallet lookup screens or admin queries.
+CREATE INDEX IF NOT EXISTS idx_bets_wallet
+  ON bets (wallet);
 
 -- ============================================================
 -- INDEXES

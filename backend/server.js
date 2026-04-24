@@ -40,6 +40,7 @@ const DEMO_MODE = process.env.DEMO_MODE !== "false";
   ------------------------------------------------------------
 */
 
+const STARTING_DURATION_MS = 20 * 1000;
 const VOTING_DURATION_MS = 20 * 1000;
 const FINALIZING_DURATION_MS = 3 * 1000;
 const BOOST_DURATION_MS = 10 * 1000;
@@ -60,6 +61,26 @@ const INTENT_EXPIRY_MS = 2 * 60 * 1000;
 */
 
 const ALLOWED_CARS = new Set(["Car 1", "Car 2", "Car 3"]);
+
+/*
+  ------------------------------------------------------------
+  BETTING RULES
+  ------------------------------------------------------------
+  These define the first betting version:
+  - one token only
+  - preset stake sizes only
+  - fixed payout multiplier
+*/
+
+const TOKEN_SYMBOL = "YOURTOKEN";
+
+// Preset bet sizes users are allowed to place.
+// Adjust these later to match your actual token design.
+const ALLOWED_BET_AMOUNTS = new Set([1, 5, 10]);
+
+// Fixed payout multiplier for now.
+// Example: stake 5 tokens -> potential payout 10 tokens.
+const FIXED_PAYOUT_MULTIPLIER = 2.0;
 
 /*
   ------------------------------------------------------------
@@ -177,6 +198,48 @@ function seedInitialCycleIfNeeded() {
 }
 
 /*
+  settleConfirmedBetsForRace()
+
+  This is the later settlement step once a race has an official result.
+
+  Logic:
+  - if the race completed normally:
+      winning-car bets -> won
+      all others        -> lost
+  - if the race is cancelled or invalid:
+      all confirmed bets -> refunded
+
+  This does NOT yet send real payouts/refunds.
+  It only updates backend bet state cleanly for v1.
+*/
+function settleConfirmedBetsForRace(raceId, winningCarId, raceResultState) {
+  const bets = db.prepare(`
+    SELECT * FROM bets
+    WHERE race_id = ? AND status = 'confirmed'
+  `).all(raceId);
+
+  const now = nowIso();
+
+  for (const bet of bets) {
+    if (raceResultState === "completed") {
+      const nextStatus = bet.car_id === winningCarId ? "won" : "lost";
+
+      db.prepare(`
+        UPDATE bets
+        SET status = ?, settled_at = ?
+        WHERE id = ?
+      `).run(nextStatus, now, bet.id);
+    } else if (raceResultState === "cancelled" || raceResultState === "invalid") {
+      db.prepare(`
+        UPDATE bets
+        SET status = ?, refunded_at = ?
+        WHERE id = ?
+      `).run("refunded", now, bet.id);
+    }
+  }
+}
+
+/*
   ------------------------------------------------------------
   VOTE / WINNER LOGIC
   ------------------------------------------------------------
@@ -204,6 +267,7 @@ function getWinningCarForCycle(cycleId) {
   This is the heart of the race state machine.
 
   idle        -> stays idle until /api/race/start is called
+  starting    -> 20 second countdown before race starts. Betting still active
   voting      -> turns into finalizing when time is up
   finalizing  -> turns into boost when time is up
   boost       -> starts next voting cycle, or returns to idle after last cycle
@@ -222,6 +286,12 @@ function advanceCycleIfNeeded() {
 
   // If the current cycle has not ended yet, do nothing.
   if (nowMs() < endsAtMs) return;
+
+  // Starting countdown ended -> begin boost voting cycle
+  if (cycle.state === "starting") {
+    setCycleState(cycle.id, "voting", VOTING_DURATION_MS);
+    return;
+  }
 
   // Voting period ended -> move to finalizing
   if (cycle.state === "voting") {
@@ -244,6 +314,32 @@ function advanceCycleIfNeeded() {
       startIdleRace(cycle.race_id + 1);
     }
   }
+}
+
+/*
+  Moves the current idle cycle into the starting state.
+
+  This creates a shared 20-second pre-race countdown.
+  During this state:
+  - betting is still open
+  - race has not started yet
+  - after countdown ends, backend moves to voting
+*/
+function setCurrentCycleToStarting(cycleId) {
+  const startedAt = new Date();
+  const endsAt = new Date(startedAt.getTime() + STARTING_DURATION_MS);
+
+  db.prepare(`
+    UPDATE cycles
+    SET state = ?, started_at = ?, ends_at = ?, winner_car_id = ?
+    WHERE id = ?
+  `).run(
+    "starting",
+    startedAt.toISOString(),
+    endsAt.toISOString(),
+    null,
+    cycleId
+  );
 }
 
 /*
@@ -271,6 +367,35 @@ function isValidCarId(carId) {
 // Later you can validate actual Solana signature formats.
 function isValidSignature(value) {
   return typeof value === "string" && value.length >= 8 && value.length <= 256;
+}
+
+/*
+  Checks whether the provided stake amount is one of the allowed preset sizes.
+*/
+function isValidBetAmount(amount) {
+  return Number.isInteger(amount) && ALLOWED_BET_AMOUNTS.has(amount);
+}
+
+/*
+  Returns the current race ID from the latest cycle.
+  This is helpful when looking up whether a wallet already bet in this race.
+*/
+function getCurrentRaceId() {
+  const cycle = getCurrentCycle();
+  return cycle ? cycle.race_id : null;
+}
+
+/*
+  Betting is open before the race starts.
+
+  v1 rule:
+  - idle      = betting open, race waiting
+  - starting  = betting still open during 20-second countdown
+  - voting    = betting locked
+  - finalizing/boost = betting locked
+*/
+function isRaceOpenForBetting(cycle) {
+  return cycle && (cycle.state === "idle" || cycle.state === "starting");
 }
 
 /*
@@ -443,6 +568,121 @@ const confirmVoteTx = db.transaction(({ cycle, intent, wallet, txSignature, mess
 });
 
 /*
+  Create bet intent transaction.
+
+  What it does:
+  - ensures this wallet has not already bet in the current race
+  - calculates potential payout
+  - inserts a new bet in pending_payment state
+
+  Why pending_payment?
+  Because this mirrors your current vote flow:
+  1. create intent
+  2. later submit payment proof
+  3. backend confirms the bet
+*/
+const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stakeAmount }) => {
+  const existingBet = db.prepare(`
+    SELECT id
+    FROM bets
+    WHERE race_id = ? AND wallet = ?
+      AND status IN ('pending_payment', 'confirmed', 'won', 'lost', 'refunded')
+  `).get(raceId, wallet);
+
+  if (existingBet) {
+    const err = new Error("Wallet has already placed a bet for this race");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const betId = nanoid();
+
+  // Precompute the possible return now so the value is locked in at bet time.
+  const potentialPayout = Math.floor(stakeAmount * FIXED_PAYOUT_MULTIPLIER);
+
+  db.prepare(`
+    INSERT INTO bets (
+      id,
+      race_id,
+      cycle_id,
+      wallet,
+      car_id,
+      token_symbol,
+      stake_amount,
+      payout_multiplier,
+      potential_payout,
+      status,
+      payment_tx_signature,
+      message_signature,
+      created_at,
+      settled_at,
+      refunded_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    betId,
+    raceId,
+    cycleId,
+    wallet,
+    carId,
+    TOKEN_SYMBOL,
+    stakeAmount,
+    FIXED_PAYOUT_MULTIPLIER,
+    potentialPayout,
+    "pending_payment",
+    null,
+    null,
+    nowIso(),
+    null,
+    null
+  );
+
+  return {
+    betId,
+    potentialPayout
+  };
+});
+
+/*
+  Confirm bet transaction.
+
+  What it does:
+  - checks the bet is still awaiting payment
+  - checks it belongs to the current race
+  - stores payment proof fields
+  - marks the bet as confirmed
+
+  This is the point where the bet becomes "real" for the race.
+*/
+const confirmBetTx = db.transaction(({ bet, raceId, paymentTxSignature, messageSignature }) => {
+  if (bet.status !== "pending_payment") {
+    const err = new Error("Bet is no longer awaiting payment");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (bet.race_id !== raceId) {
+    const err = new Error("Bet does not belong to the current race");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  db.prepare(`
+    UPDATE bets
+    SET status = ?, payment_tx_signature = ?, message_signature = ?
+    WHERE id = ?
+  `).run("confirmed", paymentTxSignature, messageSignature, bet.id);
+
+  return {
+    betId: bet.id,
+    raceId: bet.race_id,
+    carId: bet.car_id,
+    stakeAmount: bet.stake_amount,
+    potentialPayout: bet.potential_payout
+  };
+});
+
+/*
   ------------------------------------------------------------
   RESPONSE FORMATTER
   ------------------------------------------------------------
@@ -529,18 +769,27 @@ app.get("/api/cycle/result", (req, res) => {
 
 /*
   POST /api/race/start
-  Starts the race only if currently idle.
-  Creates voting cycle 1 for the current race.
+
+  Starts the pre-race countdown.
+
+  Important:
+  This does NOT immediately start the voting/race cycle anymore.
+  It changes the current race from idle -> starting.
+
+  During starting:
+  - users can still place bets
+  - frontend shows "Race starts in Xs"
+  - after 20 seconds, backend moves to voting automatically
 */
 app.post("/api/race/start", (req, res) => {
   advanceCycleIfNeeded();
   const cycle = getCurrentCycle();
 
   if (cycle.state !== "idle") {
-    return res.status(400).json({ error: "Race has already started" });
+    return res.status(400).json({ error: "Race countdown has already started" });
   }
 
-  startVotingCycle(cycle.race_id, 1);
+  setCurrentCycleToStarting(cycle.id);
 
   return res.json({
     success: true,
@@ -680,6 +929,199 @@ app.post("/api/vote-submit", (req, res) => {
       error: error.message || "Failed to submit vote"
     });
   }
+});
+
+/*
+  POST /api/bet-intent
+
+  Creates a pending bet record before payment is verified.
+
+  Request body:
+  {
+    wallet: string,
+    carId: string,
+    stakeAmount: integer
+  }
+
+  Rules enforced here:
+  - betting must still be open
+  - wallet must be valid
+  - chosen car must be valid
+  - stake amount must be one of the preset allowed sizes
+  - one wallet can only have one bet per race
+*/
+app.post("/api/bet-intent", (req, res) => {
+  advanceCycleIfNeeded();
+  const cycle = getCurrentCycle();
+
+  if (!isRaceOpenForBetting(cycle)) {
+    return res.status(400).json({ error: "Betting is not open" });
+  }
+
+  const { wallet, carId, stakeAmount } = req.body ?? {};
+
+  if (!isValidWallet(wallet)) {
+    return res.status(400).json({ error: "Invalid wallet" });
+  }
+
+  if (!isValidCarId(carId)) {
+    return res.status(400).json({ error: "Invalid carId" });
+  }
+
+  if (!isValidBetAmount(stakeAmount)) {
+    return res.status(400).json({ error: "Invalid stakeAmount" });
+  }
+
+  try {
+    const result = createBetIntentTx({
+      raceId: cycle.race_id,
+      cycleId: cycle.id,
+      wallet,
+      carId,
+      stakeAmount
+    });
+
+    return res.json({
+      betId: result.betId,
+      raceId: cycle.race_id,
+      cycleId: cycle.id,
+      carId,
+      stakeAmount,
+      tokenSymbol: TOKEN_SYMBOL,
+      payoutMultiplier: FIXED_PAYOUT_MULTIPLIER,
+      potentialPayout: result.potentialPayout
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "Failed to create bet intent"
+    });
+  }
+});
+
+/*
+  POST /api/bet-submit
+
+  Confirms a bet after payment/signature proof is provided.
+
+  Request body:
+  {
+    betId: string,
+    wallet: string,
+    paymentTxSignature: string,
+    messageSignature: string
+  }
+
+  For now:
+  - demo mode always passes payment verification
+  - later this becomes real Solana token transfer / signature verification
+*/
+app.post("/api/bet-submit", (req, res) => {
+  advanceCycleIfNeeded();
+  const cycle = getCurrentCycle();
+
+  if (!isRaceOpenForBetting(cycle)) {
+    return res.status(400).json({ error: "Betting is not open" });
+  }
+
+  const { betId, wallet, paymentTxSignature, messageSignature } = req.body ?? {};
+
+  if (typeof betId !== "string" || betId.length < 8 || betId.length > 64) {
+    return res.status(400).json({ error: "Invalid betId" });
+  }
+
+  if (!isValidWallet(wallet)) {
+    return res.status(400).json({ error: "Invalid wallet" });
+  }
+
+  if (!isValidSignature(paymentTxSignature) || !isValidSignature(messageSignature)) {
+    return res.status(400).json({ error: "Invalid signature payload" });
+  }
+
+  const bet = db.prepare(`
+    SELECT * FROM bets WHERE id = ?
+  `).get(betId);
+
+  if (!bet) {
+    return res.status(404).json({ error: "Bet not found" });
+  }
+
+  if (bet.wallet !== wallet) {
+    return res.status(400).json({ error: "Wallet does not match bet" });
+  }
+
+  /*
+    Demo-mode payment verification.
+
+    For now:
+    - in DEMO_MODE, always accept the payment proof
+    - later, replace this with real fixed-token verification on Solana
+  */
+  const verificationPassed = DEMO_MODE ? true : false;
+
+  if (!verificationPassed) {
+    return res.status(400).json({ error: "Bet payment verification failed" });
+  }
+
+  try {
+    const result = confirmBetTx({
+      bet,
+      raceId: cycle.race_id,
+      paymentTxSignature,
+      messageSignature
+    });
+
+    return res.json({
+      success: true,
+      betId: result.betId,
+      raceId: result.raceId,
+      carId: result.carId,
+      stakeAmount: result.stakeAmount,
+      potentialPayout: result.potentialPayout
+    });
+  } catch (error) {
+    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+      return res.status(400).json({
+        error: "Wallet has already placed a bet for this race"
+      });
+    }
+
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "Failed to submit bet"
+    });
+  }
+});
+
+/*
+  GET /api/bet/current?wallet=...
+
+  Returns this wallet's current bet for the active race, if one exists.
+
+  This will help the frontend later show things like:
+  - current chosen car
+  - stake amount
+  - confirmed/pending status
+*/
+app.get("/api/bet/current", (req, res) => {
+  const wallet = req.query.wallet;
+
+  if (!isValidWallet(wallet)) {
+    return res.status(400).json({ error: "Invalid wallet" });
+  }
+
+  const raceId = getCurrentRaceId();
+
+  if (!raceId) {
+    return res.json({ bet: null });
+  }
+
+  const bet = db.prepare(`
+    SELECT * FROM bets
+    WHERE race_id = ? AND wallet = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(raceId, wallet);
+
+  return res.json({ bet: bet || null });
 });
 
 /*

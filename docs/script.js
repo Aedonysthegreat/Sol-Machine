@@ -49,6 +49,9 @@ const boostTimer = document.getElementById("boostTimer");
 // Placeholder wallet button.
 const connectWalletBtn = document.getElementById("connectWalletBtn");
 
+// Button to start a 20 second delay before race starts
+const startRaceBtn = document.getElementById("startRaceBtn");
+
 // Car selects and boost buttons.
 // These are queried once on load because the page structure is static.
 const carSelects = document.querySelectorAll(".car-select");
@@ -129,6 +132,11 @@ let hasInitialSync = false;
   renderStateFromBackend() runs during the same boost cycle.
 */
 let shownBoostResultCycleId = null;
+
+// Betting states
+let currentBetId = null;
+let currentBetStatus = null;
+let isSubmittingBet = false;
 
 /*
   ============================================================
@@ -371,6 +379,94 @@ async function startRace() {
   return data;
 }
 
+/*
+  Creates a pending bet intent on the backend.
+
+  This does not confirm the bet yet.
+  It tells the backend:
+  - which wallet
+  - which car
+  - which stake amount
+*/
+async function createBetIntent(wallet, carId, stakeAmount) {
+  const res = await fetch(`${API_BASE}/bet-intent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      wallet,
+      carId,
+      stakeAmount
+    })
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to create bet intent");
+  }
+
+  return data;
+}
+
+/*
+  Submits the bet payment proof.
+
+  In demo mode:
+  - paymentTxSignature is a fake mock value
+  - messageSignature is a fake mock value
+
+  Later:
+  - these will come from the connected Solana wallet/payment flow
+*/
+async function submitBet(betId, wallet) {
+  const fakePaymentTxSignature = `mock_bet_tx_${Date.now()}`;
+  const fakeMessageSignature = `mock_bet_msg_${Date.now()}`;
+
+  const res = await fetch(`${API_BASE}/bet-submit`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      betId,
+      wallet,
+      paymentTxSignature: fakePaymentTxSignature,
+      messageSignature: fakeMessageSignature
+    })
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to submit bet");
+  }
+
+  return data;
+}
+
+/*
+  Fetches this wallet's current bet for the active race.
+  Useful after refresh so the UI can recover the user's bet state.
+*/
+async function fetchCurrentBet(wallet) {
+  const res = await fetch(
+    `${API_BASE}/bet/current?wallet=${encodeURIComponent(wallet)}`,
+    {
+      cache: "no-store"
+    }
+  );
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to fetch current bet");
+  }
+
+  return data.bet;
+}
+
 // Create vote intent.
 // Backend stores wallet + cycle + car selection and returns an intent ID.
 async function createVoteIntent(wallet, carId) {
@@ -511,7 +607,9 @@ function startCountdownToEndsAt() {
     const msRemaining = new Date(currentCycleEndsAt).getTime() - Date.now();
     const seconds = Math.max(0, Math.ceil(msRemaining / 1000));
 
-    if (currentState === "voting") {
+    if (currentState === "starting") {
+      boostTimer.textContent = `Race starts in: ${seconds}s`;
+    } else if (currentState === "voting") {
       boostTimer.textContent = `Vote closes in: ${seconds}s`;
     } else if (currentState === "finalizing") {
       boostTimer.textContent = `Finalizing boost... ${seconds}s`;
@@ -549,12 +647,27 @@ function renderStateFromBackend() {
       resetRaceSelection();
     }
 
+    if (startRaceBtn) {
+      startRaceBtn.disabled = false;
+      startRaceBtn.textContent = "Start Race";
+    }
+
     renderIdleUI();
     return;
   }
 
   // Non-idle states always show the selected/locked car UI.
   applyCarSelectionUI();
+
+  if (currentState === "starting") {
+    if (startRaceBtn) {
+      startRaceBtn.disabled = true;
+      startRaceBtn.textContent = "Race Starting";
+    }
+
+    startCountdownToEndsAt();
+    return;
+  }
 
   const allCarCards = document.querySelectorAll(".car-card");
   const activeCarId = lockedCarId || selectedCarId;
@@ -581,6 +694,11 @@ function renderStateFromBackend() {
         }
       }
     });
+  }
+
+  if (startRaceBtn) {
+    startRaceBtn.disabled = true;
+    startRaceBtn.textContent = "Race Active";
   }
 
   // ----------------------------------------------------------
@@ -638,8 +756,6 @@ function renderStateFromBackend() {
       showBoostResultModal(currentWinnerCarId);
     }
   }
-
-  startCountdownToEndsAt();
 }
 
 /*
@@ -648,74 +764,96 @@ function renderStateFromBackend() {
   ============================================================
 */
 
-/*
-  CAR SELECTION
+startCountdownToEndsAt()
 
-  Flow:
-  1. user picks a car from dropdown
-  2. immediately show only that car
-  3. if backend is idle -> start race
-  4. if already voting -> just keep that car selected
+/*
+  CAR / BET SELECTION
+
+  New Option B flow:
+  1. user chooses a car and stake amount from the dropdown
+  2. frontend creates a bet intent
+  3. frontend submits mock payment proof
+  4. backend confirms the bet
+  5. UI locks onto that car and shows the Boost button area
+  6. race only starts when Start Race is clicked separately
 */
 carSelects.forEach((select) => {
   select.addEventListener("change", async (event) => {
     const chosenValue = event.target.value;
 
-    // Ignore blank/default option
     if (chosenValue === "") return;
 
     const chosenCarId = event.target.closest(".car-card")?.dataset.car;
     if (!chosenCarId) return;
 
+    /*
+      The option values are currently:
+      "X $Boost"
+      "XX $Boost"
+      "XXX $Boost"
+
+      For v1 we map those to preset backend stake amounts.
+      You can rename these later to "1 Token", "5 Tokens", etc.
+    */
+    const stakeAmountByOption = {
+      "X $Boost": 1,
+      "XX $Boost": 5,
+      "XXX $Boost": 10
+    };
+
+    const stakeAmount = stakeAmountByOption[chosenValue];
+
+    if (!stakeAmount) {
+      alert("Invalid bet amount selected");
+      return;
+    }
+
     try {
-      // Make sure frontend knows current backend state before acting.
       if (!hasInitialSync || currentState === null) {
         await syncFromBackend();
       }
 
-      // Store UI selection.
+      if (currentState !== "idle" && currentState !== "starting") {
+        alert("Betting is closed for this race");
+        select.value = "";
+        return;
+      }
+
+      isSubmittingBet = true;
+
       selectedCarId = chosenCarId;
       pendingRaceStartCarId = chosenCarId;
       lockedCarId = chosenCarId;
       localStorage.setItem("lockedCarId", lockedCarId);
 
-      // Show selected car immediately.
       applyCarSelectionUI();
 
-      // If idle, this selection starts the race.
-      if (currentState === "idle") {
-        isStartingRace = true;
-        boostTimer.textContent = "Starting race...";
+      boostTimer.textContent = "Submitting bet...";
 
-        clearInterval(pollInterval);
+      const betIntent = await createBetIntent(DEMO_WALLET, chosenCarId, stakeAmount);
+      currentBetId = betIntent.betId;
 
-        const raceStartData = await startRace();
-        applyCycleFromBackend(raceStartData.cycle);
+      const betResult = await submitBet(betIntent.betId, DEMO_WALLET);
 
-        // Invalidate any old in-flight sync expectations.
-        syncRequestCounter++;
+      currentBetStatus = "confirmed";
+      isSubmittingBet = false;
 
-        if (currentState === "idle") {
-          // Backend has not transitioned visually yet; keep selection visible.
-          applyCarSelectionUI();
-          boostTimer.textContent = "Starting race...";
-        } else {
-          renderStateFromBackend();
-        }
+      boostTimer.textContent = `Bet submitted: ${stakeAmount} ${betIntent.tokenSymbol} on ${chosenCarId}`;
 
-        startBackendPolling();
-        return;
-      }
-
-      // If already in voting, just keep showing selected car.
-      if (currentState === "voting") {
-        applyCarSelectionUI();
-      }
+      await syncFromBackend();
     } catch (error) {
       console.error(error);
-      isStartingRace = false;
-      boostTimer.textContent = "Unable to start race";
-      startBackendPolling();
+
+      isSubmittingBet = false;
+      selectedCarId = null;
+      pendingRaceStartCarId = null;
+      lockedCarId = null;
+      currentBetId = null;
+      currentBetStatus = null;
+
+      localStorage.removeItem("lockedCarId");
+
+      renderIdleUI();
       alert(error.message);
     }
   });
