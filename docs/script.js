@@ -343,11 +343,17 @@ function resetRaceSelection() {
   selectedCarId = null;
   pendingRaceStartCarId = null;
   lockedCarId = null;
+
   currentVoteIntentId = null;
   votedCycleId = null;
   isSubmittingVote = false;
   submittingVoteCycleId = null;
   shownBoostResultCycleId = null;
+
+  // Clear old bet state from the completed race.
+  currentBetId = null;
+  currentBetStatus = null;
+  isSubmittingBet = false;
 
   hideBoostResultModal();
 
