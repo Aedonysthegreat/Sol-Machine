@@ -282,14 +282,6 @@ function applyCarSelectionUI() {
   carsGrid?.classList.toggle("single-car-view", visibleCards.length === 1);
 }
 
-  const visibleCards = Array.from(allCarCards).filter(
-    (card) => !card.classList.contains("hidden")
-  );
-
-  // If only one card is left visible, switch the grid into enlarged single-car mode.
-  carsGrid?.classList.toggle("single-car-view", visibleCards.length === 1);
-}
-
 /*
   renderIdleUI()
 
