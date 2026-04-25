@@ -832,33 +832,24 @@ function renderStateFromBackend() {
   6. race only starts when Start Race is clicked separately
 */
 carSelects.forEach((select) => {
-  select.addEventListener("change", async (event) => {
-    const chosenValue = event.target.value;
+  select.addEventListener("change", async () => {
+    const chosenValue = select.value;
+
+    console.log("Dropdown raw value:", chosenValue);
 
     if (chosenValue === "") return;
 
-    const chosenCarId = event.target.closest(".car-card")?.dataset.car;
+    const chosenCarId = select.closest(".car-card")?.dataset.car;
     if (!chosenCarId) return;
 
-    /*
-      The option values are currently:
-      "1 $Boost"
-      "5 $Boost"
-      "10 $Boost"
+    const stakeAmount = Number.parseInt(chosenValue, 10);
 
-      For v1 we map those to preset backend stake amounts.
-      You can rename these later to "1 Token", "5 Tokens", etc.
-    */
-    const stakeAmountByOption = {
-      "1 $Boost": 1,
-      "5 $Boost": 5,
-      "10 $Boost": 10
-    };
+    console.log("Parsed stake amount:", stakeAmount);
 
-    const stakeAmount = stakeAmountByOption[chosenValue];
-
-    if (!stakeAmount) {
+    if (!Number.isInteger(stakeAmount) || ![1, 5, 10].includes(stakeAmount)) {
+      console.log("Invalid chosenValue:", chosenValue);
       alert("Invalid bet amount selected");
+      select.value = "";
       return;
     }
 
