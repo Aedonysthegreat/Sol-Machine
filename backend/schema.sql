@@ -185,6 +185,41 @@ CREATE INDEX IF NOT EXISTS idx_bets_wallet
   ON bets (wallet);
 
 -- ============================================================
+-- race_results
+-- ============================================================
+-- Stores official final race results received from the external
+-- car/race backend.
+--
+-- Important:
+-- - This betting backend does NOT decide the race winner.
+-- - The external race backend/admin system submits the result.
+-- - Once a result is recorded, confirmed bets can be settled.
+--
+-- status meanings:
+-- - completed = race finished normally and has a winning car
+-- - cancelled = race was cancelled and bets should be refunded
+-- - invalid   = race result should not count and bets should be refunded
+
+CREATE TABLE IF NOT EXISTS race_results (
+  race_id INTEGER PRIMARY KEY,
+
+  -- Winning car for completed races.
+  -- Nullable so cancelled/invalid races do not need a winner.
+  winning_car_id TEXT,
+
+  status TEXT NOT NULL CHECK (status IN ('completed', 'cancelled', 'invalid')),
+
+  -- Identifies who/what submitted the result.
+  -- Example: 'car-backend', 'admin', 'manual-test'
+  source TEXT NOT NULL,
+
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_race_results_status
+  ON race_results (status);
+
+-- ============================================================
 -- INDEXES
 -- ============================================================
 -- These improve lookup speed for common queries.

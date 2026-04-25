@@ -220,9 +220,19 @@ function settleConfirmedBetsForRace(raceId, winningCarId, raceResultState) {
 
   const now = nowIso();
 
+  let wonCount = 0;
+  let lostCount = 0;
+  let refundedCount = 0;
+
   for (const bet of bets) {
     if (raceResultState === "completed") {
       const nextStatus = bet.car_id === winningCarId ? "won" : "lost";
+
+      if (nextStatus === "won") {
+        wonCount += 1;
+      } else {
+        lostCount += 1;
+      }
 
       db.prepare(`
         UPDATE bets
@@ -230,6 +240,8 @@ function settleConfirmedBetsForRace(raceId, winningCarId, raceResultState) {
         WHERE id = ?
       `).run(nextStatus, now, bet.id);
     } else if (raceResultState === "cancelled" || raceResultState === "invalid") {
+      refundedCount += 1;
+
       db.prepare(`
         UPDATE bets
         SET status = ?, refunded_at = ?
@@ -237,6 +249,13 @@ function settleConfirmedBetsForRace(raceId, winningCarId, raceResultState) {
       `).run("refunded", now, bet.id);
     }
   }
+
+  return {
+    totalConfirmedBets: bets.length,
+    wonCount,
+    lostCount,
+    refundedCount
+  };
 }
 
 /*
@@ -360,6 +379,22 @@ function isValidWallet(wallet) {
 // Only allow known car IDs.
 function isValidCarId(carId) {
   return typeof carId === "string" && ALLOWED_CARS.has(carId);
+}
+
+function isValidRaceResultStatus(status) {
+  return (
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "invalid"
+  );
+}
+
+function isRaceAlreadySettled(raceId) {
+  const existingResult = db.prepare(`
+    SELECT race_id FROM race_results WHERE race_id = ?
+  `).get(raceId);
+
+  return Boolean(existingResult);
 }
 
 // Simple signature validation.
@@ -681,6 +716,95 @@ const confirmBetTx = db.transaction(({ bet, raceId, paymentTxSignature, messageS
     potentialPayout: bet.potential_payout
   };
 });
+
+/*
+  submitRaceResultTx
+
+  This transaction records the official final race result and settles
+  all confirmed bets for that race in one safe database operation.
+
+  Why it is a transaction:
+  - If the race result is inserted but bet settlement fails, the database
+    could end up in a half-finished state.
+  - Wrapping both steps in a transaction means SQLite commits everything
+    together or rolls everything back together.
+*/
+const submitRaceResultTx = db.transaction(
+  ({ raceId, winningCarId, status, source }) => {
+    /*
+      Prevent duplicate settlement.
+
+      race_results.race_id is already the PRIMARY KEY, so the database
+      would reject duplicate race results anyway, but this check gives us
+      a cleaner error message before trying the insert.
+    */
+    if (isRaceAlreadySettled(raceId)) {
+      const err = new Error("Race result has already been submitted");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // Store one consistent timestamp for both the race result record
+    // and the settlement operation that follows.
+    const now = nowIso();
+
+    /*
+      Record the official result.
+
+      Important:
+      - This backend is not deciding the winner.
+      - It is only storing the result submitted by the external car/race backend.
+      - winningCarId will be a car ID for completed races.
+      - winningCarId should be null for cancelled or invalid races.
+    */
+    db.prepare(`
+      INSERT INTO race_results (
+        race_id,
+        winning_car_id,
+        status,
+        source,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      raceId,
+      winningCarId,
+      status,
+      source,
+      now
+    );
+
+    /*
+      Settle all confirmed bets for this race.
+
+      If status is:
+      - completed: bets on winningCarId become "won", others become "lost"
+      - cancelled/invalid: all confirmed bets become "refunded"
+
+      The function returns a summary count so the API response can show
+      how many bets were won, lost, or refunded.
+    */
+    const settlement = settleConfirmedBetsForRace(
+      raceId,
+      winningCarId,
+      status
+    );
+
+    /*
+      Return a clean summary object to the route handler.
+
+      This is what POST /api/race/result can send back to the caller.
+    */
+    return {
+      raceId,
+      winningCarId,
+      status,
+      source,
+      createdAt: now,
+      settlement
+    };
+  }
+);
 
 /*
   ------------------------------------------------------------
@@ -1122,6 +1246,117 @@ app.get("/api/bet/current", (req, res) => {
   `).get(raceId, wallet);
 
   return res.json({ bet: bet || null });
+});
+
+/*
+  POST /api/race/result
+
+  Receives the official final race result from the external car/race backend.
+
+  Important:
+  - This betting backend does NOT decide the race winner.
+  - This endpoint only accepts and records the final result.
+  - Once accepted, confirmed bets for that race are settled.
+  - Protected by requireAdmin so random users cannot submit race results.
+
+  Example completed body:
+  {
+    "raceId": 7,
+    "winningCarId": "Car 2",
+    "status": "completed",
+    "source": "car-backend"
+  }
+
+  Example cancelled body:
+  {
+    "raceId": 7,
+    "status": "cancelled",
+    "source": "manual-test"
+  }
+*/
+app.post("/api/race/result", requireAdmin, (req, res) => {
+  const {
+    raceId,
+    winningCarId = null,
+    status,
+    source = "unknown"
+  } = req.body || {};
+
+  if (!Number.isInteger(raceId) || raceId < 1) {
+    return res.status(400).json({ error: "Invalid raceId" });
+  }
+
+  if (!isValidRaceResultStatus(status)) {
+    return res.status(400).json({ error: "Invalid race result status" });
+  }
+
+  if (status === "completed" && !isValidCarId(winningCarId)) {
+    return res.status(400).json({
+      error: "Completed race results require a valid winningCarId"
+    });
+  }
+
+  if (
+    (status === "cancelled" || status === "invalid") &&
+    winningCarId !== null
+  ) {
+    return res.status(400).json({
+      error: "Cancelled or invalid races should not include winningCarId"
+    });
+  }
+
+  if (typeof source !== "string" || source.length < 2 || source.length > 64) {
+    return res.status(400).json({ error: "Invalid result source" });
+  }
+
+  const raceExists = db.prepare(`
+    SELECT race_id FROM cycles WHERE race_id = ? LIMIT 1
+  `).get(raceId);
+
+  if (!raceExists) {
+    return res.status(404).json({ error: "Race not found" });
+  }
+
+  try {
+    const result = submitRaceResultTx({
+      raceId,
+      winningCarId,
+      status,
+      source
+    });
+
+    return res.json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "Failed to submit race result"
+    });
+  }
+});
+
+/*
+  GET /api/race/result/:raceId
+
+  Returns the official final result for a race, if one has been submitted.
+*/
+app.get("/api/race/result/:raceId", (req, res) => {
+  const raceId = Number(req.params.raceId);
+
+  if (!Number.isInteger(raceId) || raceId < 1) {
+    return res.status(400).json({ error: "Invalid raceId" });
+  }
+
+  const result = db.prepare(`
+    SELECT *
+    FROM race_results
+    WHERE race_id = ?
+  `).get(raceId);
+
+  return res.json({
+    result: result || null
+  });
 });
 
 /*
