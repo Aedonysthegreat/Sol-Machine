@@ -421,6 +421,29 @@ function getCurrentRaceId() {
 }
 
 /*
+  Checks whether a race has at least one confirmed bet.
+
+  Why this exists:
+  - The frontend disables Start Race before a user backs a car.
+  - But frontend checks can be bypassed.
+  - This backend check prevents someone from directly calling
+    POST /api/race/start before any real/confirmed bet exists.
+
+  Demo rule:
+  - A race can only start once at least one bet has status 'confirmed'.
+*/
+function raceHasConfirmedBet(raceId) {
+  const row = db.prepare(`
+    SELECT id
+    FROM bets
+    WHERE race_id = ? AND status = 'confirmed'
+    LIMIT 1
+  `).get(raceId);
+
+  return Boolean(row);
+}
+
+/*
   Betting is open before the race starts.
 
   v1 rule:
@@ -896,25 +919,62 @@ app.get("/api/cycle/result", (req, res) => {
 
   Starts the pre-race countdown.
 
-  Important:
-  This does NOT immediately start the voting/race cycle anymore.
-  It changes the current race from idle -> starting.
+  Demo-mode rule:
+  - The race must currently be idle.
+  - The race must have at least one confirmed bet.
+  - This prevents empty races from being started.
 
-  During starting:
-  - users can still place bets
-  - frontend shows "Race starts in Xs"
-  - after 20 seconds, backend moves to voting automatically
+  Later production note:
+  - This route may become admin/race-backend controlled instead of
+    being publicly triggered by the frontend.
 */
 app.post("/api/race/start", (req, res) => {
+  // Make sure any expired/finished cycle state is advanced before checking.
   advanceCycleIfNeeded();
+
+  // Get the latest/current cycle after any possible advancement.
   const cycle = getCurrentCycle();
 
+  /*
+    Only idle races can be started.
+
+    If the backend is already in starting/voting/finalizing/boost,
+    the race is already underway and should not be started again.
+  */
   if (cycle.state !== "idle") {
-    return res.status(400).json({ error: "Race countdown has already started" });
+    return res.status(400).json({
+      error: "Race countdown has already started"
+    });
   }
 
+  /*
+    Backend safety check:
+    Do not allow a race to start unless at least one confirmed bet exists
+    for the current race.
+
+    This protects against:
+    - users clicking Start Race before backing a car
+    - users calling POST /api/race/start directly from outside the UI
+    - frontend state getting out of sync
+  */
+  if (!raceHasConfirmedBet(cycle.race_id)) {
+    return res.status(400).json({
+      error: "At least one confirmed bet is required before starting the race"
+    });
+  }
+
+  /*
+    Move the current idle cycle into the starting countdown.
+
+    This does not immediately start boost voting.
+    It begins the 20-second pre-race countdown first.
+  */
   setCurrentCycleToStarting(cycle.id);
 
+  /*
+    Return the new cycle state so the frontend can immediately update
+    without waiting for the next polling interval.
+  */
   return res.json({
     success: true,
     cycle: serializeCycle(getCurrentCycle())
