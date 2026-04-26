@@ -42,6 +42,17 @@ let appConfig = {
 };
 
 /*
+  Difference between backend server time and this device's local time.
+
+  Why:
+  - countdown end times are created by the backend
+  - Date.now() uses the user's device clock
+  - different devices can be 1-2 seconds apart
+  - using this offset makes all devices count down from backend time
+*/
+let serverTimeOffsetMs = 0;
+
+/*
   Fetch safe public config from the backend.
 
   This lets backend .env settings control app mode instead of hardcoding
@@ -598,7 +609,6 @@ async function submitVote(intentId, wallet) {
   ============================================================
 */
 
-// Apply backend cycle data to frontend state.
 function applyCycleFromBackend(cycle) {
   previousState = currentState;
 
@@ -606,6 +616,22 @@ function applyCycleFromBackend(cycle) {
   currentState = cycle.state;
   currentWinnerCarId = cycle.winnerCarId ?? cycle.winner_car_id ?? null;
   currentCycleEndsAt = cycle.endsAt ?? cycle.ends_at ?? null;
+
+  /*
+    Calculate how far this device's clock is from the backend clock.
+
+    Example:
+    - if the laptop clock is 2 seconds behind the server,
+      serverTimeOffsetMs will be about +2000
+    - countdowns then use Date.now() + serverTimeOffsetMs
+  */
+  if (cycle.serverTime) {
+    const serverNowMs = new Date(cycle.serverTime).getTime();
+
+    if (Number.isFinite(serverNowMs)) {
+      serverTimeOffsetMs = serverNowMs - Date.now();
+    }
+  }
 
   // Once backend leaves idle, race start is no longer "pending"
   if (currentState !== "idle") {
@@ -680,7 +706,8 @@ function startCountdownToEndsAt() {
   function updateCountdown() {
     if (!currentCycleEndsAt) return;
 
-    const msRemaining = new Date(currentCycleEndsAt).getTime() - Date.now();
+    const serverAdjustedNowMs = Date.now() + serverTimeOffsetMs;
+    const msRemaining = new Date(currentCycleEndsAt).getTime() - serverAdjustedNowMs;
     const seconds = Math.max(0, Math.ceil(msRemaining / 1000));
 
     if (currentState === "starting") {

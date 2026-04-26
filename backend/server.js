@@ -892,7 +892,16 @@ function serializeCycle(cycle) {
     startedAt: cycle.started_at,
     endsAt: cycle.state === "idle" ? null : cycle.ends_at,
     winnerCarId: cycle.winner_car_id,
-    raceStarted: cycle.state !== "idle"
+    raceStarted: cycle.state !== "idle",
+
+    /*
+      Server time lets the frontend calculate countdowns using the backend's
+      clock instead of each user's device clock.
+
+      This prevents laptop/phone countdown differences if one device clock is
+      a second or two out of sync.
+    */
+    serverTime: nowIso()
   };
 }
 
