@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-// const API_BASE = "http://localhost:3001/api";
+const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -203,6 +203,21 @@ let shownBoostResultCycleId = null;
 let currentBetId = null;
 let currentBetStatus = null;
 let isSubmittingBet = false;
+
+/*
+  ============================================================
+  WALLET STATE
+  ============================================================
+
+  Demo mode:
+  - uses DEMO_WALLET generated from localStorage
+
+  Devnet mode:
+  - uses a real injected Solana wallet such as Phantom or Solflare
+  - connectedWalletPublicKey becomes the wallet address used for bets/votes
+*/
+let connectedWalletPublicKey = null;
+let isWalletConnecting = false;
 
 /*
   ============================================================
@@ -425,6 +440,141 @@ function resetRaceSelection() {
 
   localStorage.removeItem("lockedCarId");
   localStorage.removeItem("votedCycleId");
+}
+
+/*
+  Returns true if the browser has an injected Solana wallet.
+
+  Phantom, Solflare, and other Solana wallets may expose themselves through
+  window.solana. For this first devnet step, we keep it simple and use that
+  provider directly.
+*/
+function hasInjectedSolanaWallet() {
+  return typeof window !== "undefined" && Boolean(window.solana);
+}
+
+/*
+  Returns the active wallet ID that should be sent to the backend.
+
+  Demo mode:
+  - use the existing generated DEMO_WALLET
+
+  Devnet mode:
+  - use the connected wallet public key
+*/
+function getActiveWallet() {
+  if (appConfig.appMode === "devnet") {
+    return connectedWalletPublicKey;
+  }
+
+  return DEMO_WALLET;
+}
+
+/*
+  Updates the wallet button text based on the current mode and connection state.
+*/
+function updateWalletButton() {
+  if (!connectWalletBtn) return;
+
+  if (appConfig.appMode === "demo") {
+    connectWalletBtn.textContent = "Demo Wallet";
+    connectWalletBtn.disabled = false;
+    return;
+  }
+
+  if (isWalletConnecting) {
+    connectWalletBtn.textContent = "Connecting...";
+    connectWalletBtn.disabled = true;
+    return;
+  }
+
+  if (connectedWalletPublicKey) {
+    /*
+      Show a shortened wallet address so the UI stays clean.
+      Example:
+      7xK...9ab
+    */
+    const start = connectedWalletPublicKey.slice(0, 4);
+    const end = connectedWalletPublicKey.slice(-4);
+
+    connectWalletBtn.textContent = `${start}...${end}`;
+    connectWalletBtn.disabled = false;
+    return;
+  }
+
+  connectWalletBtn.textContent = "Connect Wallet";
+  connectWalletBtn.disabled = false;
+}
+
+/*
+  Connects to an injected Solana wallet.
+
+  This is devnet-mode only.
+  It does not send transactions yet.
+*/
+async function connectSolanaWallet() {
+  if (appConfig.appMode !== "devnet") {
+    alert("Demo mode is active. Real wallet connection is only used in devnet mode.");
+    return;
+  }
+
+  if (!hasInjectedSolanaWallet()) {
+    alert("No Solana wallet found. Install Phantom or Solflare, then refresh.");
+    return;
+  }
+
+  try {
+    isWalletConnecting = true;
+    updateWalletButton();
+
+    /*
+      This opens the wallet approval popup.
+
+      If the user approves, the wallet returns a public key.
+      If they reject, this will throw and we show a friendly message.
+    */
+    const response = await window.solana.connect();
+
+    connectedWalletPublicKey = response.publicKey.toString();
+
+    console.log("Connected Solana wallet:", connectedWalletPublicKey);
+  } catch (error) {
+    console.error("Wallet connection failed:", error);
+    alert("Wallet connection was cancelled or failed.");
+  } finally {
+    isWalletConnecting = false;
+    updateWalletButton();
+  }
+}
+
+/*
+  Attempts to reconnect silently if the wallet was already trusted.
+
+  This avoids forcing the wallet popup every page refresh.
+*/
+async function trySilentWalletReconnect() {
+  if (appConfig.appMode !== "devnet") return;
+  if (!hasInjectedSolanaWallet()) return;
+
+  try {
+    /*
+      onlyIfTrusted means:
+      - reconnect if the user has already approved this site before
+      - do not open a popup if they have not
+    */
+    const response = await window.solana.connect({ onlyIfTrusted: true });
+
+    connectedWalletPublicKey = response.publicKey.toString();
+
+    console.log("Silently reconnected wallet:", connectedWalletPublicKey);
+  } catch {
+    /*
+      No problem. This just means the user has not connected yet.
+    */
+    connectedWalletPublicKey = null;
+  } finally {
+    updateWalletButton();
+  }
 }
 
 /*
@@ -1083,11 +1233,21 @@ boostButtons.forEach((button) => {
 });
 
 /*
-  Wallet connection placeholder.
-  Later this becomes your real Solana wallet connect logic.
+  Wallet connection button.
+
+  Demo mode:
+  - just shows that a generated demo wallet is being used
+
+  Devnet mode:
+  - connects to the injected Solana wallet
 */
-connectWalletBtn.addEventListener("click", () => {
-  alert("Wallet connection will go here.");
+connectWalletBtn.addEventListener("click", async () => {
+  if (appConfig.appMode === "demo") {
+    alert(`Demo wallet active:\n${DEMO_WALLET}`);
+    return;
+  }
+
+  await connectSolanaWallet();
 });
 
 /*
@@ -1140,6 +1300,14 @@ async function initApp() {
     await fetchAppConfig();
 
     console.log("Loaded app config:", appConfig);
+
+    /*
+      After config loads, update wallet UI.
+
+      If appMode is devnet, try to reconnect to a previously approved wallet.
+    */
+    updateWalletButton();
+    await trySilentWalletReconnect();
 
     startBackendPolling();
   } catch (error) {
