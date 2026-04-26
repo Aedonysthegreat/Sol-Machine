@@ -2,3 +2,4 @@ node_modules
 data
 sol-machine.sqlite
 .env
+helpers.txt

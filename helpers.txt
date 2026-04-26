@@ -9,3 +9,14 @@ git push origin main
 
 reset demo wallet run in browsers console and refresh
 localStorage.removeItem("demoWallet");
+
+// Local demo backend
+const API_BASE = "http://localhost:3001/api";
+
+Revert local code 
+git status
+git fetch origin
+git branch --show-current
+git checkout main
+git reset --hard origin/main
+git clean -fd

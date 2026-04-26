@@ -9,7 +9,62 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
+
+// Local demo backend
+const API_BASE = "http://localhost:3001/api";
+
+/*
+  ============================================================
+  APP CONFIG STATE
+  ============================================================
+
+  The backend tells the frontend which mode we are running in.
+
+  demo:
+  - use current generated demo wallet
+  - use mock transaction signatures
+  - current working flow remains unchanged
+
+  devnet:
+  - use real Solana wallet connection
+  - create real Devnet transactions
+  - backend verifies transaction signatures
+*/
+let appConfig = {
+  appMode: "demo",
+  demoMode: true,
+  solanaCluster: "devnet",
+  solanaRpcUrl: "https://api.devnet.solana.com",
+  tokenSymbol: "BOOST",
+  tokenMint: null,
+  treasuryWallet: null
+};
+
+/*
+  Fetch safe public config from the backend.
+
+  This lets backend .env settings control app mode instead of hardcoding
+  demo/devnet behaviour throughout the frontend.
+*/
+async function fetchAppConfig() {
+  const res = await fetch(`${API_BASE}/config?ts=${Date.now()}`, {
+    cache: "no-store"
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to fetch app config");
+  }
+
+  appConfig = {
+    ...appConfig,
+    ...data
+  };
+
+  return appConfig;
+}
 
 /*
   Demo wallet helper.
@@ -1045,5 +1100,28 @@ function startBackendPolling() {
   ============================================================
 */
 
-// Start polling as soon as the script loads.
-startBackendPolling();
+/*
+  Initial app load.
+
+  Important:
+  - Load app config first.
+  - Then start the existing backend polling.
+  - This does not change race, bet, or vote behaviour.
+*/
+async function initApp() {
+  try {
+    await fetchAppConfig();
+
+    console.log("Loaded app config:", appConfig);
+
+    startBackendPolling();
+  } catch (error) {
+    console.error("App init failed:", error);
+
+    if (boostTimer) {
+      boostTimer.textContent = "Connection issue";
+    }
+  }
+}
+
+initApp();

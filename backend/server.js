@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { nanoid } from "nanoid";
@@ -33,6 +34,46 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 // Later, when Solana is added, this can be set to false and the
 // verification function can do real on-chain checks.
 const DEMO_MODE = process.env.DEMO_MODE !== "false";
+
+/*
+  ------------------------------------------------------------
+  APP / BLOCKCHAIN MODE CONFIG
+  ------------------------------------------------------------
+
+  APP_MODE controls the broad mode of the app.
+
+  demo:
+  - uses the existing generated demo wallet
+  - uses mock transaction signatures
+  - keeps the current working demo flow intact
+
+  devnet:
+  - will use a real Solana wallet
+  - will create real Devnet transactions
+  - backend will verify transactions before confirming bets/votes
+*/
+const APP_MODE = process.env.APP_MODE || "demo";
+
+/*
+  Solana network settings.
+
+  These are not used by the demo flow yet.
+  They are exposed through /api/config so the frontend can prepare
+  for devnet mode later.
+*/
+const SOLANA_CLUSTER = process.env.SOLANA_CLUSTER || "devnet";
+
+const SOLANA_RPC_URL =
+  process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
+
+/*
+  Public wallet/token addresses.
+
+  These are safe to expose to the frontend because they are public addresses,
+  not private keys.
+*/
+const TOKEN_MINT = process.env.TOKEN_MINT || "";
+const TREASURY_WALLET = process.env.TREASURY_WALLET || "";
 
 /*
   ------------------------------------------------------------
@@ -72,7 +113,13 @@ const ALLOWED_CARS = new Set(["Car 1", "Car 2", "Car 3"]);
   - fixed payout multiplier
 */
 
-const TOKEN_SYMBOL = "YOURTOKEN";
+/*
+  Token symbol stored with bet records.
+
+  In demo mode this can be BOOST.
+  In devnet mode this should match your test token symbol.
+*/
+const TOKEN_SYMBOL = process.env.TOKEN_SYMBOL || "BOOST";
 
 // Preset bet sizes users are allowed to place.
 // Adjust these later to match your actual token design.
@@ -873,6 +920,30 @@ seedInitialCycleIfNeeded();
   ROUTES
   ------------------------------------------------------------
 */
+
+/*
+  GET /api/config
+
+  Returns safe public app configuration for the frontend.
+
+  Important:
+  - Do NOT expose private keys or secrets here.
+  - It is safe to expose public addresses such as token mint and treasury wallet.
+  - The frontend uses this to know whether it is running in demo mode or devnet mode.
+*/
+app.get("/api/config", (req, res) => {
+  return res.json({
+    appMode: APP_MODE,
+    demoMode: DEMO_MODE,
+
+    solanaCluster: SOLANA_CLUSTER,
+    solanaRpcUrl: SOLANA_RPC_URL,
+
+    tokenSymbol: TOKEN_SYMBOL,
+    tokenMint: TOKEN_MINT || null,
+    treasuryWallet: TREASURY_WALLET || null
+  });
+});
 
 /*
   GET /api/cycle/current
