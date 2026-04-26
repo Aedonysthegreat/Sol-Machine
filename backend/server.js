@@ -687,17 +687,44 @@ const confirmVoteTx = db.transaction(({ cycle, intent, wallet, txSignature, mess
   3. backend confirms the bet
 */
 const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stakeAmount }) => {
+  /*
+    Check whether this wallet already has a bet for this race.
+
+    Important devnet behaviour:
+    - confirmed/won/lost/refunded bets should block another bet
+    - pending_payment should NOT permanently block the user
+
+    Why:
+    In devnet mode, the flow is:
+    create bet intent -> wallet transaction -> submit proof
+
+    If the user cancels the wallet popup, closes Phantom, or the payment fails,
+    the pending_payment bet would otherwise soft-lock them out of betting again.
+  */
   const existingBet = db.prepare(`
-    SELECT id
+    SELECT id, status
     FROM bets
     WHERE race_id = ? AND wallet = ?
-      AND status IN ('pending_payment', 'confirmed', 'won', 'lost', 'refunded')
+    ORDER BY created_at DESC
+    LIMIT 1
   `).get(raceId, wallet);
 
-  if (existingBet) {
+  if (existingBet && existingBet.status !== "pending_payment") {
     const err = new Error("Wallet has already placed a bet for this race");
     err.statusCode = 400;
     throw err;
+  }
+
+  /*
+    Remove stale pending_payment bets before creating a new one.
+
+    This lets the user retry if the wallet payment did not complete.
+  */
+  if (existingBet && existingBet.status === "pending_payment") {
+    db.prepare(`
+      DELETE FROM bets
+      WHERE id = ?
+    `).run(existingBet.id);
   }
 
   const betId = nanoid();
@@ -1314,13 +1341,25 @@ app.post("/api/bet-submit", (req, res) => {
   }
 
   /*
-    Demo-mode payment verification.
+    Temporary payment verification.
 
-    For now:
-    - in DEMO_MODE, always accept the payment proof
-    - later, replace this with real fixed-token verification on Solana
+    Demo mode:
+    - accept mock payment signatures
+
+    Devnet mode:
+    - temporarily accept real-looking transaction signatures so we can test
+      frontend wallet transfer flow first
+
+    Next step:
+    - replace the devnet branch with real Solana RPC verification
   */
-  const verificationPassed = DEMO_MODE ? true : false;
+  const verificationPassed =
+    DEMO_MODE ||
+    (
+      APP_MODE === "devnet" &&
+      typeof paymentTxSignature === "string" &&
+      paymentTxSignature.length >= 40
+    );
 
   if (!verificationPassed) {
     return res.status(400).json({ error: "Bet payment verification failed" });

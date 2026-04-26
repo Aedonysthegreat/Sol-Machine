@@ -169,7 +169,20 @@ let previousState = null;
 //   the car we keep visible for the current round so the UI does not jump around
 let selectedCarId = null;
 let pendingRaceStartCarId = null;
-let lockedCarId = localStorage.getItem("lockedCarId") || null;
+
+/*
+  Do not restore lockedCarId directly from localStorage on page load.
+
+  Why:
+  - localStorage can survive page refreshes, backend resets, failed wallet
+    transactions, or race changes
+  - if lockedCarId is restored without a confirmed backend bet, the UI can
+    jump straight to the selected-car screen and soft-lock
+
+  From now on, lockedCarId should only be restored from backend truth via
+  restoreCurrentBetFromBackend().
+*/
+let lockedCarId = null;
 
 // Vote submission state.
 let currentVoteIntentId = null;
@@ -409,6 +422,8 @@ function renderIdleUI() {
     }
   });
 
+  updateStartRaceButton();
+
   boostTimer.textContent = "Select a car to start the race";
 }
 
@@ -578,6 +593,158 @@ async function trySilentWalletReconnect() {
 }
 
 /*
+  Shows a temporary bet/payment status in the top bar.
+
+  This is used while the wallet/payment flow is still in progress,
+  before the backend has confirmed the bet.
+*/
+function setBetPendingMessage(message) {
+  if (!boostTimer) return;
+  boostTimer.textContent = message;
+}
+
+/*
+  Returns true only when this browser/wallet has a confirmed bet
+  for the current race.
+
+  Start Race should only be clickable after this is true.
+*/
+function userHasConfirmedBet() {
+  return currentBetStatus === "confirmed" && currentBetId !== null;
+}
+
+/*
+  Central place to control the Start Race button.
+
+  Rules:
+  - idle + confirmed bet = enabled
+  - idle + no confirmed bet = disabled
+  - starting/active race = disabled
+*/
+function updateStartRaceButton() {
+  if (!startRaceBtn) return;
+
+  if (currentState === "idle" && userHasConfirmedBet()) {
+    startRaceBtn.disabled = false;
+    startRaceBtn.textContent = "Start Race";
+    return;
+  }
+
+  if (currentState === "starting") {
+    startRaceBtn.disabled = true;
+    startRaceBtn.textContent = "Race Starting";
+    return;
+  }
+
+  if (
+    currentState === "voting" ||
+    currentState === "finalizing" ||
+    currentState === "boost"
+  ) {
+    startRaceBtn.disabled = true;
+    startRaceBtn.textContent = "Race Active";
+    return;
+  }
+
+  startRaceBtn.disabled = true;
+  startRaceBtn.textContent = "Start Race";
+}
+
+/*
+  ============================================================
+  DEVNET SOL PAYMENT HELPERS
+  ============================================================
+
+  First devnet payment version:
+  - uses SOL, not SPL tokens yet
+  - sends a small Devnet SOL transfer from the connected wallet
+    to the treasury wallet from /api/config
+  - returns the transaction signature so the backend can record it
+
+  Later:
+  - we will verify the signature on the backend
+  - then we can swap SOL transfers for SPL token transfers
+*/
+
+/*
+  Sends a Devnet SOL payment for a bet.
+
+  This should trigger the Phantom transaction approval popup.
+*/
+async function sendDevnetBetPayment(stakeAmount) {
+
+  if (appConfig.appMode !== "devnet") {
+    throw new Error("Devnet payment called while not in devnet mode");
+  }
+
+  if (!connectedWalletPublicKey) {
+    throw new Error("Connect your wallet before placing a devnet bet");
+  }
+
+  if (!appConfig.treasuryWallet) {
+    throw new Error("Treasury wallet is not configured");
+  }
+
+  if (!window.solana) {
+    throw new Error("No Solana wallet found");
+  }
+
+  if (!window.solanaWeb3) {
+    throw new Error("Solana Web3.js is not loaded");
+  }
+
+  /*
+    Use the browser bundle directly from window so we do not rely on
+    a global variable name that may not exist in every browser.
+  */
+  const web3 = window.solanaWeb3;
+
+  const connection = new web3.Connection(
+    appConfig.solanaRpcUrl,
+    "confirmed"
+  );
+
+  const fromPubkey = new web3.PublicKey(connectedWalletPublicKey);
+  const toPubkey = new web3.PublicKey(appConfig.treasuryWallet);
+
+  const lamports = Math.round(stakeAmount * 0.001 * web3.LAMPORTS_PER_SOL);
+
+  const transaction = new web3.Transaction().add(
+    web3.SystemProgram.transfer({
+      fromPubkey,
+      toPubkey,
+      lamports
+    })
+  );
+
+  const latestBlockhash = await connection.getLatestBlockhash("confirmed");
+
+  transaction.recentBlockhash = latestBlockhash.blockhash;
+  transaction.feePayer = fromPubkey;
+
+  const result = await window.solana.signAndSendTransaction(transaction);
+
+  const signature =
+    typeof result === "string" ? result : result.signature;
+
+  const confirmation = await connection.confirmTransaction(
+    {
+      signature,
+      blockhash: latestBlockhash.blockhash,
+      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight
+    },
+    "confirmed"
+  );
+
+  if (confirmation.value.err) {
+    console.error("Devnet transaction failed:", confirmation.value.err);
+    throw new Error("Devnet transaction failed or was reverted");
+  }
+
+  return signature;
+  }
+
+/*
   ============================================================
   BACKEND REQUEST HELPERS
   ============================================================
@@ -650,16 +817,41 @@ async function createBetIntent(wallet, carId, stakeAmount) {
 /*
   Submits the bet payment proof.
 
-  In demo mode:
-  - paymentTxSignature is a fake mock value
-  - messageSignature is a fake mock value
+  Demo mode:
+  - uses fake mock transaction signatures
 
-  Later:
-  - these will come from the connected Solana wallet/payment flow
+  Devnet mode:
+  - sends a real Devnet SOL transfer
+  - sends the real transaction signature to the backend
 */
-async function submitBet(betId, wallet) {
-  const fakePaymentTxSignature = `mock_bet_tx_${Date.now()}`;
-  const fakeMessageSignature = `mock_bet_msg_${Date.now()}`;
+
+async function submitBet(betId, wallet, stakeAmount) {
+
+  let paymentTxSignature;
+  let messageSignature;
+
+  if (appConfig.appMode === "devnet") {
+    /*
+      Real Devnet payment.
+
+      This is the part that should trigger the Phantom approval popup.
+      If you are not seeing the popup, this branch is probably not running.
+    */
+
+    paymentTxSignature = await sendDevnetBetPayment(stakeAmount);
+
+    /*
+      Temporary placeholder.
+      Later we can replace this with a signed message or memo.
+    */
+    messageSignature = `devnet_msg_${Date.now()}`;
+  } else {
+    /*
+      Existing demo behaviour.
+    */
+    paymentTxSignature = `mock_bet_tx_${Date.now()}`;
+    messageSignature = `mock_bet_msg_${Date.now()}`;
+  }
 
   const res = await fetch(`${API_BASE}/bet-submit`, {
     method: "POST",
@@ -669,8 +861,8 @@ async function submitBet(betId, wallet) {
     body: JSON.stringify({
       betId,
       wallet,
-      paymentTxSignature: fakePaymentTxSignature,
-      messageSignature: fakeMessageSignature
+      paymentTxSignature,
+      messageSignature
     })
   });
 
@@ -702,6 +894,72 @@ async function fetchCurrentBet(wallet) {
   }
 
   return data.bet;
+}
+
+/*
+  Restore this wallet's confirmed/current bet from the backend.
+
+  Backend is the source of truth.
+
+  This prevents stale localStorage from deciding whether the UI should show
+  the selected-car screen.
+*/
+async function restoreCurrentBetFromBackend() {
+  const activeWallet = getActiveWallet();
+
+  /*
+    In devnet mode, the wallet may not be connected yet.
+    If there is no active wallet, clear local selected-car state.
+  */
+  if (!activeWallet) {
+    currentBetId = null;
+    currentBetStatus = null;
+    selectedCarId = null;
+    pendingRaceStartCarId = null;
+    lockedCarId = null;
+    localStorage.removeItem("lockedCarId");
+    return;
+  }
+
+  const bet = await fetchCurrentBet(activeWallet);
+
+  /*
+    No current bet for this wallet/race.
+    Clear local selected-card state.
+  */
+  if (!bet) {
+    currentBetId = null;
+    currentBetStatus = null;
+    selectedCarId = null;
+    pendingRaceStartCarId = null;
+    lockedCarId = null;
+    localStorage.removeItem("lockedCarId");
+    return;
+  }
+
+  /*
+    Only confirmed bets should lock the UI into selected-car view.
+
+    Pending payments should not lock the user because wallet transactions can
+    be cancelled, fail, or be retried.
+  */
+  if (bet.status !== "confirmed") {
+    currentBetId = bet.id;
+    currentBetStatus = bet.status;
+    selectedCarId = null;
+    pendingRaceStartCarId = null;
+    lockedCarId = null;
+    localStorage.removeItem("lockedCarId");
+    return;
+  }
+
+  currentBetId = bet.id;
+  currentBetStatus = bet.status;
+  selectedCarId = bet.car_id;
+  pendingRaceStartCarId = null;
+  lockedCarId = bet.car_id;
+
+  localStorage.setItem("lockedCarId", lockedCarId);
 }
 
 // Create vote intent.
@@ -801,6 +1059,18 @@ function applyCycleFromBackend(cycle) {
   syncRequestCounter protects against stale responses arriving out of order.
 */
 async function syncFromBackend() {
+  /*
+    If a bet/payment is currently being submitted, do not let the normal
+    backend polling renderer overwrite the top-bar message.
+
+    Without this, the UI can briefly show:
+    "Select a car to start the race"
+    while the wallet popup/payment confirmation is still pending.
+  */
+  if (isSubmittingBet) {
+    return;
+  }
+
   const requestId = ++syncRequestCounter;
 
   try {
@@ -818,6 +1088,17 @@ async function syncFromBackend() {
     }
 
     applyCycleFromBackend(cycle);
+
+    /*
+      While the app is waiting to start, restore the current wallet's bet from
+      the backend before rendering.
+
+      This means selected-car view is based on a confirmed backend bet, not stale
+      browser storage.
+    */
+    if (!isSubmittingBet && (currentState === "idle" || currentState === "starting")) {
+      await restoreCurrentBetFromBackend();
+    }
 
     // If we have moved into a new voting cycle, clear old voted state.
     if (
@@ -898,10 +1179,10 @@ function renderStateFromBackend() {
   // IDLE
   // ----------------------------------------------------------
   if (currentState === "idle") {
-    if (startRaceBtn) {
-      startRaceBtn.disabled = false;
-      startRaceBtn.textContent = "Start Race";
-    }
+    /*
+      Start Race should only be enabled after a confirmed bet.
+    */
+    updateStartRaceButton();
 
     /*
       If we just came back from an active race, reset everything.
@@ -940,10 +1221,7 @@ function renderStateFromBackend() {
   // STARTING
   // ----------------------------------------------------------
   if (currentState === "starting") {
-    if (startRaceBtn) {
-      startRaceBtn.disabled = true;
-      startRaceBtn.textContent = "Race Starting";
-    }
+    updateStartRaceButton();
 
     document.querySelectorAll(".boost-btn").forEach((button) => {
       button.disabled = true;
@@ -961,10 +1239,7 @@ function renderStateFromBackend() {
   // VOTING
   // ----------------------------------------------------------
   if (currentState === "voting") {
-    if (startRaceBtn) {
-      startRaceBtn.disabled = true;
-      startRaceBtn.textContent = "Race Active";
-    }
+    updateStartRaceButton();
 
     allCarCards.forEach((carCard) => {
       const button = carCard.querySelector(".boost-btn");
@@ -989,10 +1264,7 @@ function renderStateFromBackend() {
   // FINALIZING
   // ----------------------------------------------------------
   if (currentState === "finalizing") {
-    if (startRaceBtn) {
-      startRaceBtn.disabled = true;
-      startRaceBtn.textContent = "Race Active";
-    }
+    updateStartRaceButton();
 
     allCarCards.forEach((carCard) => {
       const button = carCard.querySelector(".boost-btn");
@@ -1007,10 +1279,7 @@ function renderStateFromBackend() {
   // BOOST
   // ----------------------------------------------------------
   if (currentState === "boost") {
-    if (startRaceBtn) {
-      startRaceBtn.disabled = true;
-      startRaceBtn.textContent = "Race Active";
-    }
+    updateStartRaceButton();
 
     allCarCards.forEach((carCard) => {
       const button = carCard.querySelector(".boost-btn");
@@ -1063,11 +1332,10 @@ function renderStateFromBackend() {
   5. UI locks onto that car and shows the Boost button area
   6. race only starts when Start Race is clicked separately
 */
+
 carSelects.forEach((select) => {
   select.addEventListener("change", async () => {
     const chosenValue = select.value;
-
-    console.log("Dropdown raw value:", chosenValue);
 
     if (chosenValue === "") return;
 
@@ -1076,16 +1344,14 @@ carSelects.forEach((select) => {
 
     const stakeAmount = Number.parseInt(chosenValue, 10);
 
-    console.log("Parsed stake amount:", stakeAmount);
-
     if (!Number.isInteger(stakeAmount) || ![1, 5, 10].includes(stakeAmount)) {
-      console.log("Invalid chosenValue:", chosenValue);
       alert("Invalid bet amount selected");
       select.value = "";
       return;
     }
 
     try {
+
       if (!hasInitialSync || currentState === null) {
         await syncFromBackend();
       }
@@ -1096,30 +1362,82 @@ carSelects.forEach((select) => {
         return;
       }
 
+      const activeWallet = getActiveWallet();
+
+      if (!activeWallet) {
+        /*
+          Important:
+          If we return here, we must not leave the UI half-locked.
+        */
+        alert("Connect your wallet before placing a bet.");
+        select.value = "";
+        renderIdleUI();
+        return;
+      }
+
+      /*
+        Bet is starting, but do NOT lock the selected car UI yet.
+
+        In devnet mode, the user still needs to approve the wallet transaction,
+        the transaction needs to confirm, and the backend needs to accept /bet-submit.
+
+        If we lock the UI before that, the frontend can look like the bet worked
+        even when the backend has no confirmed bet.
+      */
       isSubmittingBet = true;
 
+      setBetPendingMessage("Preparing wallet confirmation...");
+
+      boostTimer.textContent =
+        appConfig.appMode === "devnet"
+          ? "Preparing wallet transaction..."
+          : "Submitting bet...";
+
+      const betIntent = await createBetIntent(
+        activeWallet,
+        chosenCarId,
+        stakeAmount
+      );
+
+      currentBetId = betIntent.betId;
+
+      setBetPendingMessage("Waiting for wallet approval...");
+
+      boostTimer.textContent = "Waiting for wallet approval...";
+
+      const betResult = await submitBet(
+        betIntent.betId,
+        activeWallet,
+        stakeAmount
+      );
+
+      /*
+        Only now is the bet actually confirmed.
+
+        This point means:
+        - demo mode: mock submit succeeded
+        - devnet mode: wallet tx succeeded and /api/bet-submit accepted it
+      */
+      currentBetStatus = "confirmed";
+      isSubmittingBet = false;
+
       selectedCarId = chosenCarId;
-      pendingRaceStartCarId = chosenCarId;
+      pendingRaceStartCarId = null;
       lockedCarId = chosenCarId;
       localStorage.setItem("lockedCarId", lockedCarId);
 
       applyCarSelectionUI();
 
-      boostTimer.textContent = "Submitting bet...";
-
-      const betIntent = await createBetIntent(DEMO_WALLET, chosenCarId, stakeAmount);
-      currentBetId = betIntent.betId;
-
-      const betResult = await submitBet(betIntent.betId, DEMO_WALLET);
-
-      currentBetStatus = "confirmed";
-      isSubmittingBet = false;
+      updateStartRaceButton();
 
       boostTimer.textContent = `Bet submitted: ${stakeAmount} ${betIntent.tokenSymbol} on ${chosenCarId}`;
 
-      await syncFromBackend();
+      /*
+        Do not immediately sync here while debugging.
+        We want to preserve the confirmed selected-car UI first.
+      */
     } catch (error) {
-      console.error(error);
+      console.error("Bet flow failed:", error);
 
       isSubmittingBet = false;
       selectedCarId = null;
@@ -1131,7 +1449,10 @@ carSelects.forEach((select) => {
       localStorage.removeItem("lockedCarId");
 
       renderIdleUI();
-      alert(error.message);
+
+      boostTimer.textContent = "Bet was not confirmed. Please try again.";
+
+      alert(error.message || "Bet failed");
     }
   });
 });
@@ -1168,7 +1489,7 @@ startRaceBtn?.addEventListener("click", async () => {
     console.error(error);
 
     if (startRaceBtn) {
-      startRaceBtn.disabled = false;
+      startRaceBtn.disabled = currentBetStatus !== "confirmed";
       startRaceBtn.textContent = "Start Race";
     }
 

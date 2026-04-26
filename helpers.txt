@@ -1,10 +1,19 @@
+Total lines of code = 4395
+
+Reset
+Invoke-RestMethod `
+  -Uri "http://localhost:3001/api/admin/reset-race" `
+  -Method POST | ConvertTo-Json -Depth 5
+
+localStorage.clear();
+
 git add .
-git commit -m "Updated site"
+git commit -m "Clock alignment"
 git push
 
 
 git add .
-git commit -m "Mobile car-view fix"
+git commit -m "Clock alignment"
 git push origin main
 
 reset demo wallet run in browsers console and refresh
@@ -20,3 +29,25 @@ git branch --show-current
 git checkout main
 git reset --hard origin/main
 git clean -fd
+
+1. Backend .env: APP_MODE=devnet and DEMO_MODE=false
+2. Restart backend
+3. Refresh frontend
+4. Connect wallet
+5. Select a car and stake
+6. Phantom should ask you to approve a SOL transfer
+7. Approve
+8. The frontend should receive a real tx signature
+9. Backend should confirm the bet
+
+git status
+git add .
+git commit -m "Add devnet SOL bet payment"
+git push origin devnet-mode
+
+exists on Devnet
+is confirmed
+sender = connected wallet
+receiver = treasury wallet
+amount = expected lamports
+signature has not been used before
