@@ -9,7 +9,7 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-   const API_BASE = "https://sol-machine-production.up.railway.app/api";
+const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
 // const API_BASE = "http://localhost:3001/api";
