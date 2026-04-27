@@ -1,4 +1,5 @@
 "use strict";
+console.log("FRONTEND SCRIPT LOADED - current file");
 
 /*
   ============================================================
@@ -573,19 +574,25 @@ async function trySilentWalletReconnect() {
 
   try {
     /*
-      onlyIfTrusted means:
-      - reconnect if the user has already approved this site before
-      - do not open a popup if they have not
+      Do not let Phantom/provider issues hang app startup forever.
     */
-    const response = await window.solana.connect({ onlyIfTrusted: true });
+    const reconnectTimeoutMs = 3000;
+
+    const response = await Promise.race([
+      window.solana.connect({ onlyIfTrusted: true }),
+
+      new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error("Silent wallet reconnect timed out"));
+        }, reconnectTimeoutMs);
+      })
+    ]);
 
     connectedWalletPublicKey = response.publicKey.toString();
 
     console.log("Silently reconnected wallet:", connectedWalletPublicKey);
-  } catch {
-    /*
-      No problem. This just means the user has not connected yet.
-    */
+  } catch (error) {
+    console.warn("Silent wallet reconnect skipped:", error.message);
     connectedWalletPublicKey = null;
   } finally {
     updateWalletButton();
@@ -1466,6 +1473,12 @@ carSelects.forEach((select) => {
   Betting locks once backend moves to "voting".
 */
 startRaceBtn?.addEventListener("click", async () => {
+  if (!userHasConfirmedBet()) {
+    alert("Please back a car before starting the race.");
+    updateStartRaceButton();
+    return;
+  }
+
   try {
     if (!hasInitialSync || currentState === null) {
       await syncFromBackend();
@@ -1618,19 +1631,26 @@ function startBackendPolling() {
 */
 async function initApp() {
   try {
+    console.log("initApp started");
+
     await fetchAppConfig();
 
     console.log("Loaded app config:", appConfig);
 
-    /*
-      After config loads, update wallet UI.
-
-      If appMode is devnet, try to reconnect to a previously approved wallet.
-    */
     updateWalletButton();
-    await trySilentWalletReconnect();
 
+    /*
+      Start backend polling first so the top bar and race UI render even if
+      Phantom is having extension/provider issues.
+    */
     startBackendPolling();
+
+    /*
+      Wallet reconnect should not block the app from loading.
+    */
+    trySilentWalletReconnect().catch((error) => {
+      console.warn("Silent wallet reconnect failed:", error);
+    });
   } catch (error) {
     console.error("App init failed:", error);
 

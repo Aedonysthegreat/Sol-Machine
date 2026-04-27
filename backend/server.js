@@ -1137,6 +1137,54 @@ app.get("/api/cycle/current", (req, res) => {
 });
 
 /*
+  GET /api/race/:raceId/bets
+
+  Returns all bets for a specific race.
+
+  Why this exists:
+  - /api/bet/current only checks the current active race
+  - after a race ends, the backend creates a new idle race
+  - this endpoint lets us inspect previous race bets and confirm whether
+    they were marked as won, lost, or refunded
+
+  This is useful for local testing and later for admin/result screens.
+*/
+app.get("/api/race/:raceId/bets", (req, res) => {
+  const raceId = Number(req.params.raceId);
+
+  if (!Number.isInteger(raceId) || raceId < 1) {
+    return res.status(400).json({ error: "Invalid raceId" });
+  }
+
+  const bets = db.prepare(`
+    SELECT
+      id,
+      race_id,
+      cycle_id,
+      wallet,
+      car_id,
+      token_symbol,
+      stake_amount,
+      payout_multiplier,
+      potential_payout,
+      status,
+      payment_tx_signature,
+      message_signature,
+      created_at,
+      settled_at,
+      refunded_at
+    FROM bets
+    WHERE race_id = ?
+    ORDER BY created_at ASC
+  `).all(raceId);
+
+  return res.json({
+    raceId,
+    bets
+  });
+});
+
+/*
   GET /api/cycle/result
   Returns current cycle result totals.
   If the app is idle, return an empty totals array.
