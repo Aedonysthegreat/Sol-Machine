@@ -1,5 +1,4 @@
 "use strict";
-console.log("FRONTEND SCRIPT LOADED - current file");
 
 /*
   ============================================================
@@ -553,7 +552,6 @@ async function connectSolanaWallet() {
 
     connectedWalletPublicKey = response.publicKey.toString();
 
-    console.log("Connected Solana wallet:", connectedWalletPublicKey);
   } catch (error) {
     console.error("Wallet connection failed:", error);
     alert("Wallet connection was cancelled or failed.");
@@ -590,9 +588,7 @@ async function trySilentWalletReconnect() {
 
     connectedWalletPublicKey = response.publicKey.toString();
 
-    console.log("Silently reconnected wallet:", connectedWalletPublicKey);
   } catch (error) {
-    console.warn("Silent wallet reconnect skipped:", error.message);
     connectedWalletPublicKey = null;
   } finally {
     updateWalletButton();
@@ -1412,7 +1408,7 @@ carSelects.forEach((select) => {
 
       boostTimer.textContent = "Waiting for wallet approval...";
 
-      const betResult = await submitBet(
+      await submitBet(
         betIntent.betId,
         activeWallet,
         stakeAmount
@@ -1631,11 +1627,8 @@ function startBackendPolling() {
 */
 async function initApp() {
   try {
-    console.log("initApp started");
 
     await fetchAppConfig();
-
-    console.log("Loaded app config:", appConfig);
 
     updateWalletButton();
 
