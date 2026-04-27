@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-// const API_BASE = "http://localhost:3001/api";
+const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -268,12 +268,36 @@ let latestSettledBetDetails = null;
 */
 let connectedWalletPublicKey = null;
 let isWalletConnecting = false;
+/*
+  Wallet balance shown in the top bar.
+
+  Devnet v1:
+  - shows SOL balance
+
+  Later:
+  - this can show $BOOST SPL token balance instead.
+*/
+let connectedWalletBalance = null;
 
 /*
   ============================================================
   UI HELPERS
   ============================================================
 */
+
+/*
+  Formats wallet balance for compact top-bar display.
+*/
+function formatWalletBalance(balance) {
+  if (balance === null || balance === undefined || Number.isNaN(balance)) {
+    return "—";
+  }
+
+  return Number(balance).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4
+  });
+}
 
 /*
   Shows the styled result modal when another car wins the boost.
@@ -524,6 +548,50 @@ function getActiveWallet() {
 }
 
 /*
+  Fetches the connected wallet's Devnet SOL balance.
+
+  This is read-only. It does not require a transaction signature.
+*/
+async function refreshWalletBalance() {
+  if (appConfig.appMode !== "devnet") {
+    connectedWalletBalance = null;
+    updateWalletButton();
+    return;
+  }
+
+  if (!connectedWalletPublicKey) {
+    connectedWalletBalance = null;
+    updateWalletButton();
+    return;
+  }
+
+  if (!window.solanaWeb3) {
+    connectedWalletBalance = null;
+    updateWalletButton();
+    return;
+  }
+
+  try {
+    const web3 = window.solanaWeb3;
+
+    const connection = new web3.Connection(
+      appConfig.solanaRpcUrl,
+      "confirmed"
+    );
+
+    const publicKey = new web3.PublicKey(connectedWalletPublicKey);
+    const lamports = await connection.getBalance(publicKey, "confirmed");
+
+    connectedWalletBalance = lamports / web3.LAMPORTS_PER_SOL;
+  } catch (error) {
+    console.error("Failed to refresh wallet balance:", error);
+    connectedWalletBalance = null;
+  } finally {
+    updateWalletButton();
+  }
+}
+
+/*
   Updates the wallet button text based on the current mode and connection state.
 */
 function updateWalletButton() {
@@ -543,14 +611,24 @@ function updateWalletButton() {
 
   if (connectedWalletPublicKey) {
     /*
-      Show a shortened wallet address so the UI stays clean.
-      Example:
-      7xK...9ab
+      Show a shortened wallet address plus wallet balance.
+
+      Devnet v1:
+      - balance is shown in SOL
+
+      Later:
+      - this can become $BOOST once SPL token balance reading is added.
     */
     const start = connectedWalletPublicKey.slice(0, 4);
     const end = connectedWalletPublicKey.slice(-4);
+    const shortWallet = `${start}...${end}`;
 
-    connectWalletBtn.textContent = `${start}...${end}`;
+    const balanceText =
+      connectedWalletBalance === null
+        ? "Balance: —"
+        : `${formatWalletBalance(connectedWalletBalance)} ${appConfig.tokenSymbol || "SOL"}`;
+
+    connectWalletBtn.textContent = `${shortWallet} | ${balanceText}`;
     connectWalletBtn.disabled = false;
     return;
   }
@@ -588,6 +666,10 @@ async function connectSolanaWallet() {
     const response = await window.solana.connect();
 
     connectedWalletPublicKey = response.publicKey.toString();
+
+    await refreshWalletBalance();
+    await refreshHudData();
+
   } catch (error) {
     console.error("Wallet connection failed:", error);
     alert("Wallet connection was cancelled or failed.");
@@ -633,6 +715,9 @@ async function trySilentWalletReconnect() {
 
     connectedWalletPublicKey = response.publicKey.toString();
 
+    await refreshWalletBalance();
+    await refreshHudData();
+
     try {
       await refreshHudData();
     } catch (error) {
@@ -641,6 +726,8 @@ async function trySilentWalletReconnect() {
     }
   } catch {
     connectedWalletPublicKey = null;
+    connectedWalletBalance = null;
+    updateWalletButton();
     updateHud();
   } finally {
     updateWalletButton();
@@ -1717,6 +1804,14 @@ carSelects.forEach((select) => {
         activeWallet,
         stakeAmount
       );
+
+      /*
+        Refresh the wallet balance after the bet transaction has completed.
+
+        Devnet v1:
+        - the balance should reduce slightly because the user paid SOL for the bet
+      */
+      await refreshWalletBalance();
 
       /*
         Only now is the bet actually confirmed.
