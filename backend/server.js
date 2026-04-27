@@ -2,6 +2,11 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { nanoid } from "nanoid";
+import {
+  Connection,
+  PublicKey,
+  LAMPORTS_PER_SOL
+} from "@solana/web3.js";
 import db from "./db.js";
 
 /*
@@ -74,6 +79,39 @@ const SOLANA_RPC_URL =
 */
 const TOKEN_MINT = process.env.TOKEN_MINT || "";
 const TREASURY_WALLET = process.env.TREASURY_WALLET || "";
+
+/*
+  ------------------------------------------------------------
+  SOLANA DEVNET VERIFICATION HELPERS
+  ------------------------------------------------------------
+
+  Devnet v1 uses native SOL transfers, not SPL tokens yet.
+
+  Frontend mapping:
+  - stake 1  = 0.001 SOL
+  - stake 5  = 0.005 SOL
+  - stake 10 = 0.010 SOL
+
+  The backend must use the same mapping when verifying payment.
+*/
+const DEVNET_SOL_PER_STAKE_UNIT = 0.001;
+
+const solanaConnection = new Connection(SOLANA_RPC_URL, "confirmed");
+
+function stakeAmountToExpectedLamports(stakeAmount) {
+  return Math.round(
+    stakeAmount * DEVNET_SOL_PER_STAKE_UNIT * LAMPORTS_PER_SOL
+  );
+}
+
+function isValidPublicKeyString(value) {
+  try {
+    new PublicKey(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /*
   ------------------------------------------------------------
@@ -557,6 +595,113 @@ function verifyVoteProof({ wallet, txSignature, messageSignature, intent }) {
   void intent;
 
   return { ok: false, error: "On-chain verification not implemented" };
+}
+
+/*
+  verifyBetPaymentProof()
+
+  Demo mode:
+  - accepts mock signatures so the existing demo mode keeps working.
+
+  Devnet mode:
+  - fetches the transaction from Solana Devnet
+  - confirms the transaction did not fail
+  - checks it contains a native SOL transfer
+  - checks sender wallet matches the bettor
+  - checks destination matches treasury wallet
+  - checks lamports match the selected stake amount
+
+  This prevents someone from confirming a bet with a random fake signature.
+*/
+async function verifyBetPaymentProof({
+  wallet,
+  paymentTxSignature,
+  bet
+}) {
+  if (DEMO_MODE) {
+    return { ok: true };
+  }
+
+  if (APP_MODE !== "devnet") {
+    return {
+      ok: false,
+      error: "Unsupported app mode for bet verification"
+    };
+  }
+
+  if (!TREASURY_WALLET) {
+    return {
+      ok: false,
+      error: "Treasury wallet is not configured"
+    };
+  }
+
+  if (!isValidPublicKeyString(wallet)) {
+    return {
+      ok: false,
+      error: "Invalid bettor wallet address"
+    };
+  }
+
+  if (!isValidPublicKeyString(TREASURY_WALLET)) {
+    return {
+      ok: false,
+      error: "Invalid treasury wallet address"
+    };
+  }
+
+  const expectedLamports = stakeAmountToExpectedLamports(bet.stake_amount);
+
+  const tx = await solanaConnection.getParsedTransaction(
+    paymentTxSignature,
+    {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0
+    }
+  );
+
+  if (!tx) {
+    return {
+      ok: false,
+      error: "Transaction not found or not confirmed yet"
+    };
+  }
+
+  if (tx.meta?.err) {
+    return {
+      ok: false,
+      error: "Transaction failed on-chain"
+    };
+  }
+
+  const instructions = tx.transaction?.message?.instructions || [];
+
+  const matchingTransfer = instructions.find((instruction) => {
+    const parsed = instruction.parsed;
+
+    if (instruction.program !== "system") return false;
+    if (!parsed || parsed.type !== "transfer") return false;
+
+    const info = parsed.info || {};
+
+    return (
+      info.source === wallet &&
+      info.destination === TREASURY_WALLET &&
+      Number(info.lamports) === expectedLamports
+    );
+  });
+
+  if (!matchingTransfer) {
+    return {
+      ok: false,
+      error: "Transaction does not match expected bet payment"
+    };
+  }
+
+  return {
+    ok: true,
+    expectedLamports
+  };
 }
 
 /*
@@ -1306,7 +1451,7 @@ app.post("/api/bet-intent", (req, res) => {
   - demo mode always passes payment verification
   - later this becomes real Solana token transfer / signature verification
 */
-app.post("/api/bet-submit", (req, res) => {
+app.post("/api/bet-submit", async (req, res) => {
   advanceCycleIfNeeded();
   const cycle = getCurrentCycle();
 
@@ -1341,28 +1486,24 @@ app.post("/api/bet-submit", (req, res) => {
   }
 
   /*
-    Temporary payment verification.
+    Verify payment proof before confirming the bet.
 
     Demo mode:
-    - accept mock payment signatures
+    - accepts mock signatures
 
     Devnet mode:
-    - temporarily accept real-looking transaction signatures so we can test
-      frontend wallet transfer flow first
-
-    Next step:
-    - replace the devnet branch with real Solana RPC verification
+    - verifies the actual Solana transaction
   */
-  const verificationPassed =
-    DEMO_MODE ||
-    (
-      APP_MODE === "devnet" &&
-      typeof paymentTxSignature === "string" &&
-      paymentTxSignature.length >= 40
-    );
+  const verification = await verifyBetPaymentProof({
+    wallet,
+    paymentTxSignature,
+    bet
+  });
 
-  if (!verificationPassed) {
-    return res.status(400).json({ error: "Bet payment verification failed" });
+  if (!verification.ok) {
+    return res.status(400).json({
+      error: verification.error || "Bet payment verification failed"
+    });
   }
 
   try {
