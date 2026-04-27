@@ -29,6 +29,109 @@
             <p>The Pit</p>
         </section>
 
+        <!--
+            ============================================================
+            BET / RESULT HUD
+            ============================================================
+
+            Functional first:
+            - Bet Slip: current active bet
+            - Race Result: latest settled result
+            - System: wallet / mode / network info
+            -->
+        <section class="bet-hud">
+            <!-- Current bet panel -->
+            <div class="hud-panel">
+                <div class="hud-title">Bet Slip</div>
+
+                <div class="hud-grid">
+                    <div class="hud-item">
+                        <span class="hud-label">Race</span>
+                        <span class="hud-value" id="hudCurrentRaceId">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Backed Car</span>
+                        <span class="hud-value" id="hudSelectedCar">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Stake</span>
+                        <span class="hud-value" id="hudStakeAmount">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Potential Payout</span>
+                        <span class="hud-value" id="hudPotentialPayout">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Bet Status</span>
+                        <span class="hud-value hud-status" id="hudBetStatus">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Latest race result panel -->
+            <div class="hud-panel">
+                <div class="hud-title">Race Result</div>
+
+                <div class="hud-grid">
+                    <div class="hud-item">
+                        <span class="hud-label">Race</span>
+                        <span class="hud-value" id="hudResultRaceId">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Race Outcome</span>
+                        <span class="hud-value" id="hudRaceOutcome">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Winning Car</span>
+                        <span class="hud-value" id="hudWinningCar">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Your Result</span>
+                        <span class="hud-value hud-status" id="hudYourResult">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Settlement</span>
+                        <span class="hud-value" id="hudSettlement">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System panel -->
+            <div class="hud-panel">
+                <div class="hud-title">System</div>
+
+                <div class="hud-grid">
+                    <div class="hud-item">
+                        <span class="hud-label">Mode</span>
+                        <span class="hud-value" id="hudAppMode">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Network</span>
+                        <span class="hud-value" id="hudNetwork">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Token</span>
+                        <span class="hud-value" id="hudTokenSymbol">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Wallet</span>
+                        <span class="hud-value" id="hudWallet">—</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="cars-grid">
             <article class="car-card" data-car="Car 1">
                 <div class="car-image">

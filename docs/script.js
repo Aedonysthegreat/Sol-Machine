@@ -140,6 +140,31 @@ const boostResultText = document.getElementById("boostResultText");
 const closeBoostResultModalBtn = document.getElementById("closeBoostResultModal");
 
 /*
+  HUD DOM REFERENCES
+
+  These elements display:
+  - the current bet
+  - the latest settled race result
+  - app/wallet/network info
+*/
+const hudCurrentRaceId = document.getElementById("hudCurrentRaceId");
+const hudSelectedCar = document.getElementById("hudSelectedCar");
+const hudStakeAmount = document.getElementById("hudStakeAmount");
+const hudPotentialPayout = document.getElementById("hudPotentialPayout");
+const hudBetStatus = document.getElementById("hudBetStatus");
+
+const hudResultRaceId = document.getElementById("hudResultRaceId");
+const hudRaceOutcome = document.getElementById("hudRaceOutcome");
+const hudWinningCar = document.getElementById("hudWinningCar");
+const hudYourResult = document.getElementById("hudYourResult");
+const hudSettlement = document.getElementById("hudSettlement");
+
+const hudAppMode = document.getElementById("hudAppMode");
+const hudNetwork = document.getElementById("hudNetwork");
+const hudTokenSymbol = document.getElementById("hudTokenSymbol");
+const hudWallet = document.getElementById("hudWallet");
+
+/*
   ============================================================
   APP STATE
   ============================================================
@@ -216,6 +241,18 @@ let shownBoostResultCycleId = null;
 let currentBetId = null;
 let currentBetStatus = null;
 let isSubmittingBet = false;
+
+/*
+  HUD DATA STATE
+
+  currentBetDetails:
+    the current active-race bet for this wallet, if any
+
+  latestSettledBetDetails:
+    the most recent won/lost/refunded bet for this wallet
+*/
+let currentBetDetails = null;
+let latestSettledBetDetails = null;
 
 /*
   ============================================================
@@ -449,6 +486,7 @@ function resetRaceSelection() {
   // Clear old bet state from the completed race.
   currentBetId = null;
   currentBetStatus = null;
+  currentBetDetails = null;
   isSubmittingBet = false;
 
   hideBoostResultModal();
@@ -543,21 +581,31 @@ async function connectSolanaWallet() {
     updateWalletButton();
 
     /*
-      This opens the wallet approval popup.
+      Only wallet connection belongs inside this try/catch.
 
-      If the user approves, the wallet returns a public key.
-      If they reject, this will throw and we show a friendly message.
+      If this succeeds, connectedWalletPublicKey is set.
     */
     const response = await window.solana.connect();
 
     connectedWalletPublicKey = response.publicKey.toString();
-
   } catch (error) {
     console.error("Wallet connection failed:", error);
     alert("Wallet connection was cancelled or failed.");
+    return;
   } finally {
     isWalletConnecting = false;
     updateWalletButton();
+  }
+
+  /*
+    Refresh HUD after wallet connection, but do not treat HUD/backend issues
+    as wallet connection failures.
+  */
+  try {
+    await refreshHudData();
+  } catch (error) {
+    console.error("HUD refresh after wallet connect failed:", error);
+    updateHud();
   }
 }
 
@@ -571,9 +619,6 @@ async function trySilentWalletReconnect() {
   if (!hasInjectedSolanaWallet()) return;
 
   try {
-    /*
-      Do not let Phantom/provider issues hang app startup forever.
-    */
     const reconnectTimeoutMs = 3000;
 
     const response = await Promise.race([
@@ -588,8 +633,15 @@ async function trySilentWalletReconnect() {
 
     connectedWalletPublicKey = response.publicKey.toString();
 
-  } catch (error) {
+    try {
+      await refreshHudData();
+    } catch (error) {
+      console.error("HUD refresh after silent reconnect failed:", error);
+      updateHud();
+    }
+  } catch {
     connectedWalletPublicKey = null;
+    updateHud();
   } finally {
     updateWalletButton();
   }
@@ -651,6 +703,199 @@ function updateStartRaceButton() {
 
   startRaceBtn.disabled = true;
   startRaceBtn.textContent = "Start Race";
+}
+
+/*
+  Returns a short middle-truncated string for long values like wallets.
+*/
+function shortenMiddle(value, start = 4, end = 4) {
+  if (!value || typeof value !== "string") return "—";
+  if (value.length <= start + end + 3) return value;
+  return `${value.slice(0, start)}...${value.slice(-end)}`;
+}
+
+/*
+  Converts backend status values into friendly display text.
+*/
+function formatStatusLabel(status) {
+  switch (status) {
+    case "pending_payment":
+      return "Pending";
+    case "confirmed":
+      return "Confirmed";
+    case "won":
+      return "Won";
+    case "lost":
+      return "Lost";
+    case "refunded":
+      return "Refunded";
+    case "completed":
+      return "Completed";
+    case "cancelled":
+      return "Cancelled";
+    case "invalid":
+      return "Invalid";
+    default:
+      return "—";
+  }
+}
+
+/*
+  Returns the CSS status class to apply to HUD status pills.
+*/
+function getStatusClass(status) {
+  switch (status) {
+    case "pending_payment":
+      return "status-pending";
+    case "confirmed":
+      return "status-confirmed";
+    case "won":
+      return "status-won";
+    case "lost":
+      return "status-lost";
+    case "refunded":
+      return "status-refunded";
+    default:
+      return "";
+  }
+}
+
+/*
+  Applies text + status class to a HUD status field.
+*/
+function setHudStatus(el, status) {
+  if (!el) return;
+
+  el.textContent = formatStatusLabel(status);
+
+  el.classList.remove(
+    "status-pending",
+    "status-confirmed",
+    "status-won",
+    "status-lost",
+    "status-refunded"
+  );
+
+  const nextClass = getStatusClass(status);
+  if (nextClass) {
+    el.classList.add(nextClass);
+  }
+}
+
+/*
+  Formats the settlement line for the latest result panel.
+*/
+function formatSettlementValue(bet) {
+  if (!bet) return "—";
+
+  if (bet.status === "won") {
+    return `+${bet.potential_payout} ${bet.token_symbol}`;
+  }
+
+  if (bet.status === "refunded") {
+    return `Refunded ${bet.stake_amount} ${bet.token_symbol}`;
+  }
+
+  if (bet.status === "lost") {
+    return `-${bet.stake_amount} ${bet.token_symbol}`;
+  }
+
+  return "—";
+}
+
+/*
+  Renders the betting HUD from frontend state.
+
+  Panel 1:
+  - current active bet
+
+  Panel 2:
+  - most recent settled result
+
+  Panel 3:
+  - app/wallet info
+*/
+function updateHud() {
+  const activeWallet = getActiveWallet();
+
+  // ----------------------------------------------------------
+  // SYSTEM PANEL
+  // ----------------------------------------------------------
+  if (hudAppMode) {
+    hudAppMode.textContent = appConfig.appMode?.toUpperCase() || "—";
+  }
+
+  if (hudNetwork) {
+    hudNetwork.textContent = appConfig.solanaCluster || "—";
+  }
+
+  if (hudTokenSymbol) {
+    hudTokenSymbol.textContent = appConfig.tokenSymbol || "—";
+  }
+
+  if (hudWallet) {
+    hudWallet.textContent = activeWallet ? shortenMiddle(activeWallet) : "Not connected";
+  }
+
+  // ----------------------------------------------------------
+  // CURRENT BET PANEL
+  // ----------------------------------------------------------
+  if (currentBetDetails) {
+    if (hudCurrentRaceId) {
+      hudCurrentRaceId.textContent = currentBetDetails.race_id ?? "—";
+    }
+
+    if (hudSelectedCar) {
+      hudSelectedCar.textContent = currentBetDetails.car_id ?? "—";
+    }
+
+    if (hudStakeAmount) {
+      hudStakeAmount.textContent = `${currentBetDetails.stake_amount} ${currentBetDetails.token_symbol}`;
+    }
+
+    if (hudPotentialPayout) {
+      hudPotentialPayout.textContent = `${currentBetDetails.potential_payout} ${currentBetDetails.token_symbol}`;
+    }
+
+    setHudStatus(hudBetStatus, currentBetDetails.status);
+  } else {
+    if (hudCurrentRaceId) hudCurrentRaceId.textContent = "—";
+    if (hudSelectedCar) hudSelectedCar.textContent = "—";
+    if (hudStakeAmount) hudStakeAmount.textContent = "—";
+    if (hudPotentialPayout) hudPotentialPayout.textContent = "—";
+    setHudStatus(hudBetStatus, null);
+  }
+
+  // ----------------------------------------------------------
+  // LATEST RESULT PANEL
+  // ----------------------------------------------------------
+  if (latestSettledBetDetails) {
+    if (hudResultRaceId) {
+      hudResultRaceId.textContent = latestSettledBetDetails.race_id ?? "—";
+    }
+
+    if (hudRaceOutcome) {
+      hudRaceOutcome.textContent = formatStatusLabel(
+        latestSettledBetDetails.race_result_status
+      );
+    }
+
+    if (hudWinningCar) {
+      hudWinningCar.textContent = latestSettledBetDetails.winning_car_id || "—";
+    }
+
+    setHudStatus(hudYourResult, latestSettledBetDetails.status);
+
+    if (hudSettlement) {
+      hudSettlement.textContent = formatSettlementValue(latestSettledBetDetails);
+    }
+  } else {
+    if (hudResultRaceId) hudResultRaceId.textContent = "—";
+    if (hudRaceOutcome) hudRaceOutcome.textContent = "—";
+    if (hudWinningCar) hudWinningCar.textContent = "—";
+    setHudStatus(hudYourResult, null);
+    if (hudSettlement) hudSettlement.textContent = "—";
+  }
 }
 
 /*
@@ -917,6 +1162,7 @@ async function restoreCurrentBetFromBackend() {
   if (!activeWallet) {
     currentBetId = null;
     currentBetStatus = null;
+    currentBetDetails = null;
     selectedCarId = null;
     pendingRaceStartCarId = null;
     lockedCarId = null;
@@ -925,6 +1171,7 @@ async function restoreCurrentBetFromBackend() {
   }
 
   const bet = await fetchCurrentBet(activeWallet);
+  currentBetDetails = bet || null;
 
   /*
     No current bet for this wallet/race.
@@ -1015,6 +1262,57 @@ async function submitVote(intentId, wallet) {
 }
 
 /*
+  Fetch the most recent settled bet for this wallet.
+
+  This lets the HUD show the latest race outcome even after
+  the backend has already moved on to the next idle race.
+*/
+async function fetchLatestSettledBet(wallet) {
+  const res = await fetch(
+    `${API_BASE}/bet/latest-settled?wallet=${encodeURIComponent(wallet)}`,
+    {
+      cache: "no-store"
+    }
+  );
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to fetch latest settled bet");
+  }
+
+  return data.bet;
+}
+
+/*
+  Refreshes HUD-specific data from the backend.
+
+  This fetches:
+  - current active bet
+  - latest settled result
+
+  Then re-renders the HUD.
+*/
+async function refreshHudData() {
+  const activeWallet = getActiveWallet();
+
+  if (!activeWallet) {
+    currentBetDetails = null;
+    latestSettledBetDetails = null;
+    updateHud();
+    return;
+  }
+
+  /*
+    currentBetDetails is already refreshed by restoreCurrentBetFromBackend().
+    Here we only fetch the latest settled result for the result panel.
+  */
+  latestSettledBetDetails = await fetchLatestSettledBet(activeWallet);
+
+  updateHud();
+}
+
+/*
   ============================================================
   BACKEND -> FRONTEND STATE SYNC
   ============================================================
@@ -1102,6 +1400,12 @@ async function syncFromBackend() {
     if (!isSubmittingBet && (currentState === "idle" || currentState === "starting")) {
       await restoreCurrentBetFromBackend();
     }
+
+    /*
+      Refresh the HUD so the betting and latest-result panels stay in sync
+      with backend truth.
+    */
+    await refreshHudData();
 
     // If we have moved into a new voting cycle, clear old voted state.
     if (
@@ -1429,6 +1733,24 @@ carSelects.forEach((select) => {
       lockedCarId = chosenCarId;
       localStorage.setItem("lockedCarId", lockedCarId);
 
+      /*
+        Update current bet HUD data immediately so the panel changes
+        without waiting for the next polling cycle.
+      */
+      currentBetDetails = {
+        id: betIntent.betId,
+        race_id: betIntent.raceId,
+        cycle_id: betIntent.cycleId,
+        car_id: chosenCarId,
+        token_symbol: betIntent.tokenSymbol,
+        stake_amount: stakeAmount,
+        payout_multiplier: betIntent.payoutMultiplier,
+        potential_payout: betIntent.potentialPayout,
+        status: "confirmed"
+      };
+
+      updateHud();
+
       applyCarSelectionUI();
 
       updateStartRaceButton();
@@ -1448,10 +1770,12 @@ carSelects.forEach((select) => {
       lockedCarId = null;
       currentBetId = null;
       currentBetStatus = null;
+      currentBetDetails = null;
 
       localStorage.removeItem("lockedCarId");
 
       renderIdleUI();
+      updateHud();
 
       boostTimer.textContent = "Bet was not confirmed. Please try again.";
 
@@ -1627,10 +1951,19 @@ function startBackendPolling() {
 */
 async function initApp() {
   try {
-
     await fetchAppConfig();
 
     updateWalletButton();
+
+    /*
+      Render the HUD immediately with config/default values.
+
+      At this point:
+      - app mode is known
+      - network/token are known
+      - wallet may not be connected yet
+    */
+    updateHud();
 
     /*
       Start backend polling first so the top bar and race UI render even if
@@ -1640,9 +1973,12 @@ async function initApp() {
 
     /*
       Wallet reconnect should not block the app from loading.
+
+      If reconnect succeeds, trySilentWalletReconnect() will refresh the HUD.
+      If it fails, the HUD still shows Not connected.
     */
     trySilentWalletReconnect().catch((error) => {
-      console.warn("Silent wallet reconnect failed:", error);
+      updateHud();
     });
   } catch (error) {
     console.error("App init failed:", error);

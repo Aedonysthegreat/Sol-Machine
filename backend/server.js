@@ -1617,6 +1617,63 @@ app.get("/api/bet/current", (req, res) => {
 });
 
 /*
+  GET /api/bet/latest-settled?wallet=...
+
+  Returns the most recent settled bet for this wallet.
+
+  Settled means:
+  - won
+  - lost
+  - refunded
+
+  This is useful for the HUD so the frontend can still show
+  the latest race outcome after the backend has already moved
+  on to the next idle race.
+*/
+app.get("/api/bet/latest-settled", (req, res) => {
+  const wallet = req.query.wallet;
+
+  if (!isValidWallet(wallet)) {
+    return res.status(400).json({ error: "Invalid wallet" });
+  }
+
+  const bet = db.prepare(`
+    SELECT
+      b.id,
+      b.race_id,
+      b.cycle_id,
+      b.wallet,
+      b.car_id,
+      b.token_symbol,
+      b.stake_amount,
+      b.payout_multiplier,
+      b.potential_payout,
+      b.status,
+      b.payment_tx_signature,
+      b.message_signature,
+      b.created_at,
+      b.settled_at,
+      b.refunded_at,
+      rr.winning_car_id,
+      rr.status AS race_result_status,
+      rr.source AS race_result_source,
+      rr.created_at AS race_result_created_at
+    FROM bets b
+    LEFT JOIN race_results rr
+      ON rr.race_id = b.race_id
+    WHERE b.wallet = ?
+      AND b.status IN ('won', 'lost', 'refunded')
+    ORDER BY
+      COALESCE(b.settled_at, b.refunded_at, b.created_at) DESC
+    LIMIT 1
+  `).get(wallet);
+
+  return res.json({
+    bet: bet || null
+  });
+});
+
+/*
   POST /api/race/result
 
   Receives the official final race result from the external car/race backend.
