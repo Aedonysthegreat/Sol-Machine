@@ -1,4 +1,19 @@
-Total lines of code = 4395
+Total lines of code = 7201
+
+http://localhost:3001/api/bet/latest-settled?wallet=7D5LJKQA4MwhEdPT4ZthmhrmHdymvK4uMqBQJfucUtcf
+
+$wallet = "7D5LJKQA4MwhEdPT4ZthmhrmHdymvK4uMqBQJfucUtcf"
+
+Invoke-RestMethod `
+  -Uri "http://localhost:3001/api/bet/current?wallet=$wallet" `
+  -Method GET | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri "http://localhost:3001/api/race/result" `
+  -Method POST `
+  -ContentType "application/json" `
+  -Body '{"raceId":18,"winningCarId":"Car 1","status":"completed","source":"manual-test"}' `
+  | ConvertTo-Json -Depth 8
 
 Reset
 Invoke-RestMethod `
@@ -42,7 +57,7 @@ git clean -fd
 
 git status
 git add .
-git commit -m "Add devnet SOL bet payment"
+git commit -m "Varied bets, boost button tokens & UI"
 git push origin devnet-mode
 
 exists on Devnet

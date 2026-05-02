@@ -31,6 +31,135 @@
 
         <!--
             ============================================================
+            RACE BET PANEL
+            ============================================================
+
+            This is the new central betting UI.
+
+            Stage 1:
+            - builds the visual betting panel
+            - stores frontend selection state
+            - does not remove the old per-car dropdown flow yet
+
+            Later:
+            - this panel will fully replace the car-card dropdowns
+        -->
+        <section class="race-bet-panel" id="raceBetPanel">
+            <div class="race-bet-header">
+                <div>
+                    <h2>Race Bet</h2>
+                    <p>Choose your bet type, stake, and race prediction.</p>
+                </div>
+
+                <div class="race-bet-note">
+                    3 boost tokens per confirmed bettor
+                </div>
+            </div>
+
+            <!-- Bet type selection -->
+            <div class="bet-panel-section">
+                <div class="bet-panel-label">Bet Type</div>
+
+                <div class="bet-type-toggle" role="group" aria-label="Bet type">
+                    <button type="button" class="bet-type-btn active" data-bet-type="winner" id="winnerBetTypeBtn">
+                        <span class="bet-type-title">Winner</span>
+                        <span class="bet-type-subtitle">Pick 1 car · Pays 2x</span>
+                    </button>
+
+                    <button type="button" class="bet-type-btn" data-bet-type="trifecta" id="trifectaBetTypeBtn">
+                        <span class="bet-type-title">Trifecta</span>
+                        <span class="bet-type-subtitle">Exact order · Pays 5x</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stake selection -->
+            <div class="bet-panel-section">
+                <div class="bet-panel-label">Stake</div>
+
+                <div class="stake-toggle" role="group" aria-label="Stake amount">
+                    <button type="button" class="stake-btn active" data-stake="1">1</button>
+                    <button type="button" class="stake-btn" data-stake="5">5</button>
+                    <button type="button" class="stake-btn" data-stake="10">10</button>
+                </div>
+            </div>
+
+            <!-- Winner selection -->
+            <div class="bet-panel-section" id="winnerSelectionPanel">
+                <div class="bet-panel-label">Winner Selection</div>
+
+                <div class="winner-car-toggle" role="group" aria-label="Winner car">
+                    <button type="button" class="winner-car-btn" data-car="Car 1">Car 1</button>
+                    <button type="button" class="winner-car-btn" data-car="Car 2">Car 2</button>
+                    <button type="button" class="winner-car-btn" data-car="Car 3">Car 3</button>
+                </div>
+            </div>
+
+            <!-- Trifecta selection -->
+            <div class="bet-panel-section hidden" id="trifectaSelectionPanel">
+                <div class="bet-panel-label">Trifecta Order</div>
+
+                <div class="trifecta-grid">
+                    <label class="trifecta-field">
+                        <span>1st Place</span>
+                        <select id="trifectaFirstSelect">
+                            <option value="">Select car</option>
+                            <option value="Car 1">Car 1</option>
+                            <option value="Car 2">Car 2</option>
+                            <option value="Car 3">Car 3</option>
+                        </select>
+                    </label>
+
+                    <label class="trifecta-field">
+                        <span>2nd Place</span>
+                        <select id="trifectaSecondSelect">
+                            <option value="">Select car</option>
+                            <option value="Car 1">Car 1</option>
+                            <option value="Car 2">Car 2</option>
+                            <option value="Car 3">Car 3</option>
+                        </select>
+                    </label>
+
+                    <label class="trifecta-field">
+                        <span>3rd Place</span>
+                        <select id="trifectaThirdSelect">
+                            <option value="">Select car</option>
+                            <option value="Car 1">Car 1</option>
+                            <option value="Car 2">Car 2</option>
+                            <option value="Car 3">Car 3</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="trifecta-preview" id="trifectaPreview">
+                    Pick 1st, 2nd, and 3rd place.
+                </div>
+            </div>
+
+            <!-- Bet summary -->
+            <div class="bet-panel-summary">
+                <div>
+                    <span class="summary-label">Potential Payout</span>
+                    <strong id="betPanelPotentialPayout">1 → 2</strong>
+                </div>
+
+                <div>
+                    <span class="summary-label">Boost Access</span>
+                    <strong id="betPanelBoostAccess">Selected winner only</strong>
+                </div>
+            </div>
+
+            <button type="button" class="place-bet-btn" id="placeBetBtn">
+                Place Winner Bet
+            </button>
+
+            <p class="bet-panel-footnote">
+                Bigger bets do not grant extra boost control. Every confirmed bettor gets 3 race boost tokens.
+            </p>
+        </section>
+
+        <!--
+            ============================================================
             BET / RESULT HUD
             ============================================================
 
@@ -51,7 +180,12 @@
                     </div>
 
                     <div class="hud-item">
-                        <span class="hud-label">Backed Car</span>
+                        <span class="hud-label">Bet Type</span>
+                        <span class="hud-value" id="hudBetType">—</span>
+                    </div>
+
+                    <div class="hud-item">
+                        <span class="hud-label">Selection</span>
                         <span class="hud-value" id="hudSelectedCar">—</span>
                     </div>
 
@@ -173,12 +307,15 @@
 
                 <div class="stats-card">
                     <div class="stats-title">Stats, like win to lose ratio</div>
-                    <select class="bet-select car-select">
-                        <option value="" disabled selected hidden>Back car</option>
-                        <option value="1">1 $Boost</option>
-                        <option value="5">5 $Boost</option>
-                        <option value="10">10 $Boost</option>
-                    </select>
+
+                    <div class="legacy-bet-controls">
+                        <select class="bet-select car-select">
+                            <option value="" disabled selected hidden>Back car</option>
+                            <option value="1">1 $Boost</option>
+                            <option value="5">5 $Boost</option>
+                            <option value="10">10 $Boost</option>
+                        </select>
+                    </div>
                 </div>
                 <button class="boost-btn hidden">Boost</button>
             </article>
@@ -196,12 +333,15 @@
 
                 <div class="stats-card">
                     <div class="stats-title">Stats, like win to lose ratio</div>
-                    <select class="bet-select car-select">
-                        <option value="" disabled selected hidden>Back car</option>
-                        <option value="1">1 $Boost</option>
-                        <option value="5">5 $Boost</option>
-                        <option value="10">10 $Boost</option>
-                    </select>
+
+                    <div class="legacy-bet-controls">
+                        <select class="bet-select car-select">
+                            <option value="" disabled selected hidden>Back car</option>
+                            <option value="1">1 $Boost</option>
+                            <option value="5">5 $Boost</option>
+                            <option value="10">10 $Boost</option>
+                        </select>
+                    </div>
                 </div>
                 <button class="boost-btn hidden">Boost</button>
             </article>
@@ -219,12 +359,15 @@
 
                 <div class="stats-card">
                     <div class="stats-title">Stats, like win to lose ratio</div>
-                    <select class="bet-select car-select">
-                        <option value="" disabled selected hidden>Back car</option>
-                        <option value="1">1 $Boost</option>
-                        <option value="5">5 $Boost</option>
-                        <option value="10">10 $Boost</option>
-                    </select>
+
+                    <div class="legacy-bet-controls">
+                        <select class="bet-select car-select">
+                            <option value="" disabled selected hidden>Back car</option>
+                            <option value="1">1 $Boost</option>
+                            <option value="5">5 $Boost</option>
+                            <option value="10">10 $Boost</option>
+                        </select>
+                    </div>
                 </div>
                 <button class="boost-btn hidden">Boost</button>
             </article>

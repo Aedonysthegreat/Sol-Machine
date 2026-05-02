@@ -120,7 +120,7 @@ function isValidPublicKeyString(value) {
 */
 
 const STARTING_DURATION_MS = 20 * 1000;
-const VOTING_DURATION_MS = 20 * 1000;
+const VOTING_DURATION_MS = 10 * 1000;
 const FINALIZING_DURATION_MS = 3 * 1000;
 const BOOST_DURATION_MS = 3 * 1000;
 

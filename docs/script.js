@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-// const API_BASE = "http://localhost:3001/api";
+const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -165,6 +165,33 @@ const hudTokenSymbol = document.getElementById("hudTokenSymbol");
 const hudWallet = document.getElementById("hudWallet");
 
 /*
+  RACE BET PANEL REFERENCES
+
+  New central betting panel.
+
+  Stage 1:
+  - controls visual state only
+  - does not replace the old car-card dropdown flow yet
+*/
+const raceBetPanel = document.getElementById("raceBetPanel");
+
+const betTypeButtons = document.querySelectorAll(".bet-type-btn");
+const stakeButtons = document.querySelectorAll(".stake-btn");
+const winnerCarButtons = document.querySelectorAll(".winner-car-btn");
+
+const winnerSelectionPanel = document.getElementById("winnerSelectionPanel");
+const trifectaSelectionPanel = document.getElementById("trifectaSelectionPanel");
+
+const trifectaFirstSelect = document.getElementById("trifectaFirstSelect");
+const trifectaSecondSelect = document.getElementById("trifectaSecondSelect");
+const trifectaThirdSelect = document.getElementById("trifectaThirdSelect");
+const trifectaPreview = document.getElementById("trifectaPreview");
+
+const betPanelPotentialPayout = document.getElementById("betPanelPotentialPayout");
+const betPanelBoostAccess = document.getElementById("betPanelBoostAccess");
+const placeBetBtn = document.getElementById("placeBetBtn");
+
+/*
   BOOST STRATEGY HUD REFERENCES
 
   These display:
@@ -180,6 +207,15 @@ const hudBoostTokens = document.getElementById("hudBoostTokens");
 const hudBoostPowerCar1 = document.getElementById("hudBoostPowerCar1");
 const hudBoostPowerCar2 = document.getElementById("hudBoostPowerCar2");
 const hudBoostPowerCar3 = document.getElementById("hudBoostPowerCar3");
+
+/*
+  BET SLIP HUD REFERENCE
+
+  New field so the HUD can display:
+  - Winner
+  - Trifecta
+*/
+const hudBetType = document.getElementById("hudBetType");
 
 /*
   ============================================================
@@ -292,6 +328,31 @@ let currentBoostPower = {
 };
 
 /*
+  NEW RACE BET PANEL STATE
+
+  selectedBetType:
+    winner or trifecta
+
+  selectedStakeAmount:
+    current stake amount chosen in the new panel
+
+  selectedWinnerCarId:
+    selected car for winner bet
+
+  selectedTrifectaOrder:
+    exact finishing order for trifecta bet
+*/
+let selectedBetType = "winner";
+let selectedStakeAmount = 1;
+let selectedWinnerCarId = null;
+
+let selectedTrifectaOrder = {
+  first: "",
+  second: "",
+  third: ""
+};
+
+/*
   ============================================================
   WALLET STATE
   ============================================================
@@ -321,6 +382,361 @@ let connectedWalletBalance = null;
   UI HELPERS
   ============================================================
 */
+
+/*
+  Adds/removes trifecta order badges on the car cards.
+*/
+function updateTrifectaOrderBadges() {
+  const carCards = document.querySelectorAll(".car-card");
+
+  carCards.forEach((card) => {
+    const existingBadge = card.querySelector(".trifecta-order-badge");
+    if (existingBadge) {
+      existingBadge.remove();
+    }
+
+    card.classList.remove("trifecta-active");
+
+    const carId = card.dataset.car;
+    const label = getTrifectaOrderLabelForCar(carId);
+
+    if (!label) return;
+
+    card.classList.add("trifecta-active");
+
+    const badge = document.createElement("div");
+    badge.className = "trifecta-order-badge";
+    badge.textContent = `${label} Pick`;
+
+    /*
+      Append near the top content area of the card.
+      If you already have a title/container inside the card, you can move
+      this there later.
+    */
+    card.appendChild(badge);
+  });
+}
+
+/*
+  Returns the payout multiplier for the currently selected bet type.
+
+  This is for frontend display only.
+  Backend still owns the real payout multiplier.
+*/
+function getDisplayPayoutMultiplier() {
+  if (selectedBetType === "trifecta") return 5;
+  return 2;
+}
+
+/*
+  Returns whether the current trifecta order is complete and valid.
+*/
+function isSelectedTrifectaValid() {
+  const order = [
+    selectedTrifectaOrder.first,
+    selectedTrifectaOrder.second,
+    selectedTrifectaOrder.third
+  ];
+
+  if (order.some((carId) => !carId)) return false;
+
+  return new Set(order).size === 3;
+}
+
+/*
+  Returns the selected trifecta order as an array.
+*/
+function getSelectedTrifectaOrderArray() {
+  return [
+    selectedTrifectaOrder.first,
+    selectedTrifectaOrder.second,
+    selectedTrifectaOrder.third
+  ];
+}
+
+/*
+  Updates the disabled options inside trifecta selects.
+
+  This prevents the user from selecting the same car twice.
+*/
+function updateTrifectaSelectOptions() {
+  const selects = [
+    trifectaFirstSelect,
+    trifectaSecondSelect,
+    trifectaThirdSelect
+  ];
+
+  const selectedValues = selects
+    .map((select) => select?.value)
+    .filter(Boolean);
+
+  selects.forEach((select) => {
+    if (!select) return;
+
+    Array.from(select.options).forEach((option) => {
+      if (!option.value) {
+        option.disabled = false;
+        return;
+      }
+
+      option.disabled =
+        selectedValues.includes(option.value) &&
+        select.value !== option.value;
+    });
+  });
+}
+
+/*
+  Updates the preview text under the trifecta selectors.
+*/
+function updateTrifectaPreview() {
+  if (!trifectaPreview) return;
+
+  const { first, second, third } = selectedTrifectaOrder;
+
+  if (!first && !second && !third) {
+    trifectaPreview.textContent = "Pick 1st, 2nd, and 3rd place.";
+    return;
+  }
+
+  trifectaPreview.textContent = `${first || "?"} → ${second || "?"} → ${third || "?"}`;
+}
+
+/*
+  Updates the new Race Bet Panel display.
+
+  This does not submit anything.
+  It only updates the UI based on selected bet type/stake/selection.
+*/
+function updateRaceBetPanel() {
+  /*
+    Lock the Race Bet Panel once a bet is confirmed for this race.
+  */
+  const isBetLockedForRace =
+    Boolean(currentBetDetails && currentBetStatus === "confirmed");
+
+  betTypeButtons.forEach((button) => {
+    button.classList.toggle(
+      "active",
+      button.dataset.betType === selectedBetType
+    );
+    button.disabled = isBetLockedForRace;
+  });
+
+  stakeButtons.forEach((button) => {
+    button.classList.toggle(
+      "active",
+      Number(button.dataset.stake) === selectedStakeAmount
+    );
+    button.disabled = isBetLockedForRace;
+  });
+
+  winnerCarButtons.forEach((button) => {
+    button.classList.toggle(
+      "active",
+      button.dataset.car === selectedWinnerCarId
+    );
+    button.disabled = isBetLockedForRace;
+  });
+
+  if (trifectaFirstSelect) trifectaFirstSelect.disabled = isBetLockedForRace;
+  if (trifectaSecondSelect) trifectaSecondSelect.disabled = isBetLockedForRace;
+  if (trifectaThirdSelect) trifectaThirdSelect.disabled = isBetLockedForRace;
+
+  if (placeBetBtn) {
+    const hasValidSelection =
+      selectedBetType === "winner"
+        ? Boolean(selectedWinnerCarId)
+        : isSelectedTrifectaValid();
+
+    placeBetBtn.disabled = isBetLockedForRace || !hasValidSelection;
+
+    if (isBetLockedForRace) {
+      placeBetBtn.textContent = "Bet Locked for This Race";
+    } else {
+      placeBetBtn.textContent =
+        selectedBetType === "winner"
+          ? "Place Winner Bet"
+          : "Place Trifecta Bet";
+    }
+  }
+
+  const multiplier = getDisplayPayoutMultiplier();
+  const potentialPayout = selectedStakeAmount * multiplier;
+
+  betTypeButtons.forEach((button) => {
+    button.classList.toggle(
+      "active",
+      button.dataset.betType === selectedBetType
+    );
+  });
+
+  stakeButtons.forEach((button) => {
+    button.classList.toggle(
+      "active",
+      Number(button.dataset.stake) === selectedStakeAmount
+    );
+  });
+
+  winnerCarButtons.forEach((button) => {
+    button.classList.toggle(
+      "active",
+      button.dataset.car === selectedWinnerCarId
+    );
+  });
+
+  if (winnerSelectionPanel) {
+    winnerSelectionPanel.classList.toggle(
+      "hidden",
+      selectedBetType !== "winner"
+    );
+  }
+
+  if (trifectaSelectionPanel) {
+    trifectaSelectionPanel.classList.toggle(
+      "hidden",
+      selectedBetType !== "trifecta"
+    );
+  }
+
+  if (betPanelPotentialPayout) {
+    betPanelPotentialPayout.textContent =
+      `${selectedStakeAmount} → ${potentialPayout}`;
+  }
+
+  if (betPanelBoostAccess) {
+    betPanelBoostAccess.textContent =
+      selectedBetType === "winner"
+        ? "Selected winner only"
+        : "Any car in your order";
+  }
+
+  if (placeBetBtn) {
+    const hasValidSelection =
+      selectedBetType === "winner"
+        ? Boolean(selectedWinnerCarId)
+        : isSelectedTrifectaValid();
+
+    placeBetBtn.disabled = !hasValidSelection;
+
+    placeBetBtn.textContent =
+      selectedBetType === "winner"
+        ? "Place Winner Bet"
+        : "Place Trifecta Bet";
+  }
+
+  updateTrifectaSelectOptions();
+  updateTrifectaPreview();
+}
+
+/*
+  applyConfirmedBetToFrontendState()
+
+  Updates frontend state after the backend has confirmed a bet.
+
+  Works for:
+  - winner bets
+  - trifecta bets
+
+  Important:
+  For winner bets:
+  - lockedCarId is the chosen winner
+
+  For trifecta bets:
+  - lockedCarId is the first-place prediction for now
+  - later, when trifecta boost UI is added, we will show/enable all 3 boost buttons
+*/
+function applyConfirmedBetToFrontendState({
+  betIntent,
+  confirmedBet,
+  fallbackBetType,
+  fallbackCarId,
+  fallbackTrifectaOrder,
+  stakeAmount
+}) {
+  const betType =
+    confirmedBet?.betType ||
+    betIntent?.betType ||
+    fallbackBetType ||
+    "winner";
+
+  const primaryCarId =
+    confirmedBet?.carId ||
+    betIntent?.carId ||
+    fallbackCarId ||
+    fallbackTrifectaOrder?.[0] ||
+    null;
+
+  const trifectaOrder =
+    confirmedBet?.trifectaOrder ||
+    betIntent?.trifectaOrder ||
+    fallbackTrifectaOrder ||
+    null;
+
+  currentBetStatus = "confirmed";
+  isSubmittingBet = false;
+
+  /*
+  Winner bet:
+  - lock the UI to the selected winner car
+
+  Trifecta bet:
+  - keep selectedCarId as the primary/first-place car for reference
+  - do NOT lock to one card, because the user can boost any car in the order
+*/
+selectedCarId = primaryCarId;
+pendingRaceStartCarId = null;
+lockedCarId = betType === "winner" ? primaryCarId : null;
+
+  if (lockedCarId) {
+    localStorage.setItem("lockedCarId", lockedCarId);
+  }
+
+  currentBetId = betIntent.betId;
+
+  currentBetDetails = {
+    id: betIntent.betId,
+    race_id: betIntent.raceId,
+    cycle_id: betIntent.cycleId,
+
+    bet_type: betType,
+    car_id: primaryCarId,
+
+    trifecta_first_car_id: trifectaOrder ? trifectaOrder[0] : null,
+    trifecta_second_car_id: trifectaOrder ? trifectaOrder[1] : null,
+    trifecta_third_car_id: trifectaOrder ? trifectaOrder[2] : null,
+
+    token_symbol: betIntent.tokenSymbol,
+    stake_amount: stakeAmount,
+    payout_multiplier: betIntent.payoutMultiplier,
+    potential_payout: betIntent.potentialPayout,
+    status: "confirmed"
+  };
+
+  /*
+    Confirmed bet response should include the backend-created
+    internal boost tokens.
+
+    Expected after confirmation:
+    3 / 3 reserved
+  */
+  if (confirmedBet?.boostTokens) {
+    currentBoostTokens = confirmedBet.boostTokens;
+    updateBoostStrategyHud();
+  }
+
+  updateHud();
+  applyCarSelectionUI();
+  updateStartRaceButton();
+
+  if (betType === "trifecta" && trifectaOrder) {
+    boostTimer.textContent =
+      `Trifecta submitted: ${trifectaOrder.join(" → ")}`;
+  } else {
+    boostTimer.textContent =
+      `Bet submitted: ${stakeAmount} ${betIntent.tokenSymbol} on ${primaryCarId}`;
+  }
+}
 
 /*
   Formats wallet balance for compact top-bar display.
@@ -434,81 +850,112 @@ function clearAllBoostFlames() {
 /*
   applyCarSelectionUI()
 
-  Controls which car card is visible and how that card is laid out.
+  Controls which car cards are visible after a bet is confirmed.
 
-  Important state behaviour:
-  - idle:
-      keep selected car visible after a confirmed bet,
-      but do NOT show the Boost button yet
-  - starting:
-      show the Boost button, but disable it while the race countdown runs
-  - voting:
-      show the Boost button so the user can vote for the boost
-  - finalizing/boost:
-      show the button, but renderStateFromBackend() disables it
+  Winner bet:
+  - show only selected winner car
+
+  Trifecta bet:
+  - show all cars in the trifecta order
+  - with 3 cars, this means all 3 cards stay visible
+
+  It also controls whether Boost buttons are hidden or visible depending
+  on race state.
 */
 function applyCarSelectionUI() {
-  const activeCarId = lockedCarId || pendingRaceStartCarId || selectedCarId;
   const allCarCards = document.querySelectorAll(".car-card");
   const carsGrid = document.querySelector(".cars-grid");
 
+  const betType = getCurrentBetType();
+  const hasConfirmedBet =
+    currentBetDetails && currentBetStatus === "confirmed";
+
   allCarCards.forEach((carCard) => {
+    const carId = carCard.dataset.car;
     const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
     const statsCard = carCard.querySelector(".stats-card");
 
-    if (!select || !button || !statsCard) return;
+    if (!button) return;
 
-    if (activeCarId) {
-      if (carCard.dataset.car === activeCarId) {
-        carCard.classList.remove("hidden");
-
-        // Once a car is selected/bet on, hide the bet controls and stats panel.
-        select.classList.add("hidden");
-        statsCard.classList.add("hidden");
-
-        /*
-          Idle behaviour:
-          The user has selected/bet on a car, but the race has not started.
-          Keep the chosen car view visible, but do not show Boost yet.
-        */
-        if (currentState === "idle") {
-          button.classList.add("hidden");
-          button.disabled = true;
-          button.textContent = "Boost";
-        }
-
-        /*
-          Starting behaviour:
-          Race countdown is running.
-          Show the button location so the layout is stable, but block clicking.
-        */
-        else if (currentState === "starting") {
-          button.classList.remove("hidden");
-          button.disabled = true;
-          button.textContent = "Boost Locked";
-        }
-
-        /*
-          Active race behaviour:
-          Show the button. The exact enabled/disabled text is handled later
-          in renderStateFromBackend() depending on voting/finalizing/boost.
-        */
-        else {
-          button.classList.remove("hidden");
-        }
-      } else {
-        carCard.classList.add("hidden");
-      }
-    } else {
-      // No car selected yet, so restore the full default card layout.
+    /*
+      No confirmed bet yet:
+      show all cards, hide boost buttons.
+    */
+    if (!hasConfirmedBet) {
       carCard.classList.remove("hidden");
-      select.classList.remove("hidden");
-      statsCard.classList.remove("hidden");
+
+      if (statsCard) statsCard.classList.remove("hidden");
+      if (select) select.classList.add("hidden");
 
       button.classList.add("hidden");
       button.disabled = false;
       button.textContent = "Boost";
+
+      return;
+    }
+
+    /*
+      Winner bet:
+      show only selected winner car.
+    */
+    if (betType === "winner") {
+      if (currentBetDetails.car_id === carId) {
+        carCard.classList.remove("hidden");
+      } else {
+        carCard.classList.add("hidden");
+      }
+    }
+
+    /*
+      Trifecta bet:
+      show every car in the trifecta order.
+      Since there are only 3 cars, this should show all 3.
+    */
+    else if (betType === "trifecta") {
+      if (isCarAllowedForCurrentBet(carId)) {
+        carCard.classList.remove("hidden");
+      } else {
+        carCard.classList.add("hidden");
+      }
+    }
+
+    /*
+      Hide old dropdown betting controls after a bet is confirmed.
+    */
+    if (select) select.classList.add("hidden");
+    if (statsCard) statsCard.classList.add("hidden");
+
+    /*
+      Idle:
+      confirmed bet exists, but race has not started yet.
+      Keep cards visible, but no boost button yet.
+    */
+    if (currentState === "idle") {
+      button.classList.add("hidden");
+      button.disabled = true;
+      button.textContent = "Boost";
+    }
+
+    /*
+      Starting:
+      race countdown is running.
+      Show boost button position, but keep it locked.
+    */
+    else if (currentState === "starting") {
+      button.classList.remove("hidden");
+      button.disabled = true;
+      button.textContent = "Boost Locked";
+    }
+
+    /*
+      Voting/finalizing/boost:
+      show the button.
+      renderStateFromBackend() decides whether it is enabled,
+      submitted, locked, boosting, etc.
+    */
+    else {
+      button.classList.remove("hidden");
     }
   });
 
@@ -517,6 +964,8 @@ function applyCarSelectionUI() {
   );
 
   carsGrid?.classList.toggle("single-car-view", visibleCards.length === 1);
+
+  updateTrifectaOrderBadges();
 }
 
 /*
@@ -599,6 +1048,11 @@ function resetRaceSelection() {
 
   localStorage.removeItem("lockedCarId");
   localStorage.removeItem("votedCycleId");
+
+  /*
+    Unlock and reset the new Race Bet Panel for the next race.
+  */
+  resetRaceBetPanelForNextRace();
 }
 
 /*
@@ -1020,6 +1474,39 @@ function formatSettlementValue(bet) {
 }
 
 /*
+  Formats the current bet selection for the HUD.
+
+  Winner example:
+    Car 2 to win
+
+  Trifecta example:
+    Car 2 → Car 1 → Car 3
+*/
+function formatBetSelectionForHud(bet) {
+  if (!bet) return "—";
+
+  if (bet.bet_type === "trifecta") {
+    const order = [
+      bet.trifecta_first_car_id,
+      bet.trifecta_second_car_id,
+      bet.trifecta_third_car_id
+    ].filter(Boolean);
+
+    return order.length ? order.join(" → ") : "—";
+  }
+
+  return bet.car_id ? `${bet.car_id} to win` : "—";
+}
+
+/*
+  Formats the bet type for the HUD.
+*/
+function formatBetTypeForHud(bet) {
+  if (!bet) return "—";
+  return bet.bet_type === "trifecta" ? "Trifecta" : "Winner";
+}
+
+/*
   Renders the betting HUD from frontend state.
 
   Panel 1:
@@ -1082,6 +1569,17 @@ function updateHud() {
     setHudStatus(hudBetStatus, null);
   }
 
+  /*
+  Update bet type and selection in the Bet Slip HUD.
+*/
+if (hudBetType) {
+  hudBetType.textContent = formatBetTypeForHud(currentBetDetails);
+}
+
+if (hudSelectedCar) {
+  hudSelectedCar.textContent = formatBetSelectionForHud(currentBetDetails);
+}
+
   // ----------------------------------------------------------
   // LATEST RESULT PANEL
   // ----------------------------------------------------------
@@ -1112,6 +1610,63 @@ function updateHud() {
     setHudStatus(hudYourResult, null);
     if (hudSettlement) hudSettlement.textContent = "—";
   }
+}
+
+/*
+  Returns the active bet type from current bet details.
+*/
+function getCurrentBetType() {
+  return currentBetDetails?.bet_type || null;
+}
+
+/*
+  Returns the cars that are allowed to receive a boost for the current bet.
+
+  Winner:
+    [selected winner car]
+
+  Trifecta:
+    [first, second, third]
+*/
+function getAllowedBoostCarsForCurrentBet() {
+  if (!currentBetDetails) return [];
+
+  if (currentBetDetails.bet_type === "trifecta") {
+    return [
+      currentBetDetails.trifecta_first_car_id,
+      currentBetDetails.trifecta_second_car_id,
+      currentBetDetails.trifecta_third_car_id
+    ].filter(Boolean);
+  }
+
+  return currentBetDetails.car_id ? [currentBetDetails.car_id] : [];
+}
+
+/*
+  Returns whether the given car is allowed to be boosted for the current bet.
+*/
+function isCarAllowedForCurrentBet(carId) {
+  return getAllowedBoostCarsForCurrentBet().includes(carId);
+}
+
+/*
+  Returns a trifecta order label for display on a car card.
+
+  Example:
+    Car 2 => "1st"
+    Car 1 => "2nd"
+    Car 3 => "3rd"
+*/
+function getTrifectaOrderLabelForCar(carId) {
+  if (!currentBetDetails || currentBetDetails.bet_type !== "trifecta") {
+    return null;
+  }
+
+  if (currentBetDetails.trifecta_first_car_id === carId) return "1st";
+  if (currentBetDetails.trifecta_second_car_id === carId) return "2nd";
+  if (currentBetDetails.trifecta_third_car_id === carId) return "3rd";
+
+  return null;
 }
 
 /*
@@ -1270,23 +1825,59 @@ async function startRace() {
 /*
   Creates a pending bet intent on the backend.
 
-  This does not confirm the bet yet.
-  It tells the backend:
-  - which wallet
-  - which car
-  - which stake amount
+  Supports both:
+  - winner bets
+  - trifecta bets
+
+  Winner request:
+  {
+    wallet,
+    betType: "winner",
+    carId,
+    stakeAmount
+  }
+
+  Trifecta request:
+  {
+    wallet,
+    betType: "trifecta",
+    trifectaOrder: ["Car 2", "Car 1", "Car 3"],
+    stakeAmount
+  }
+
+  Backend is still the source of truth for:
+  - payout multiplier
+  - valid bet type
+  - valid car selection
+  - one bet per wallet per race
 */
-async function createBetIntent(wallet, carId, stakeAmount) {
+async function createBetIntent({
+  wallet,
+  betType,
+  carId = null,
+  trifectaOrder = null,
+  stakeAmount
+}) {
+  const body = {
+    wallet,
+    betType,
+    stakeAmount
+  };
+
+  if (betType === "winner") {
+    body.carId = carId;
+  }
+
+  if (betType === "trifecta") {
+    body.trifectaOrder = trifectaOrder;
+  }
+
   const res = await fetch(`${API_BASE}/bet-intent`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      wallet,
-      carId,
-      stakeAmount
-    })
+    body: JSON.stringify(body)
   });
 
   const data = await res.json();
@@ -1439,11 +2030,28 @@ async function restoreCurrentBetFromBackend() {
     return;
   }
 
+  /*
+  For winner bets, bet.car_id is the selected winner.
+
+  For trifecta bets, bet.car_id is currently the first-place prediction.
+  Later, when trifecta boost UI is added, the UI will need to show/enable
+  all cars in the trifecta order.
+*/
   currentBetId = bet.id;
   currentBetStatus = bet.status;
+  /*
+    Restore winner/trifecta UI correctly.
+
+    Winner:
+    - lock to one selected winner car
+
+    Trifecta:
+    - keep the first-place car as selectedCarId
+    - do not lock to one single visible card
+  */
   selectedCarId = bet.car_id;
   pendingRaceStartCarId = null;
-  lockedCarId = bet.car_id;
+  lockedCarId = bet.bet_type === "winner" ? bet.car_id : null;
 
   localStorage.setItem("lockedCarId", lockedCarId);
 }
@@ -1886,46 +2494,62 @@ function renderStateFromBackend() {
       const button = carCard.querySelector(".boost-btn");
       if (!button) return;
 
-      if (!activeCarId || carCard.dataset.car === activeCarId) {
-        /*
-          If this browser is currently submitting a vote, keep the button blocked.
-        */
-        if (isSubmittingVote && submittingVoteCycleId === currentCycleId) {
-          button.disabled = true;
-          button.textContent = "Submitting.";
-        }
+      /*
+        Get the car ID from this specific card.
 
-        /*
-          If this wallet has already voted in this cycle, block another vote.
+        This matters for trifecta bets because all 3 car cards can be visible
+        and the user may choose which car to boost.
+      */
+      const carId = carCard.dataset.car;
+      const canBoostThisCar = isCarAllowedForCurrentBet(carId);
 
-          Backend also enforces this with UNIQUE(cycle_id, wallet).
-        */
-        else if (votedCycleId === currentCycleId) {
-          button.disabled = true;
-          button.textContent = "Vote Submitted";
-        }
+      /*
+        If this car is not allowed for the current bet, lock its button.
 
-        /*
-          If this wallet has used all boost tokens for the race,
-          block the button.
+        Winner bet:
+        - only the selected winner car is allowed
 
-          Backend still enforces this too, but this improves UX.
-        */
-        else if (
-          currentBoostTokens &&
-          Number(currentBoostTokens.remaining) <= 0
-        ) {
-          button.disabled = true;
-          button.textContent = "No Boost Tokens";
-        }
+        Trifecta bet:
+        - all cars in the trifecta order are allowed
+      */
+      if (!canBoostThisCar) {
+        button.disabled = true;
+        button.textContent = "Locked";
+      }
 
-        /*
-          Otherwise, voting is open and the user still has tokens.
-        */
-        else {
-          button.disabled = false;
-          button.textContent = "Boost";
-        }
+      /*
+        If this browser is currently submitting a vote, keep the button blocked.
+      */
+      else if (isSubmittingVote && submittingVoteCycleId === currentCycleId) {
+        button.disabled = true;
+        button.textContent = "Submitting.";
+      }
+
+      /*
+        If this wallet has already voted in this cycle, block another vote.
+      */
+      else if (votedCycleId === currentCycleId) {
+        button.disabled = true;
+        button.textContent = "Vote Submitted";
+      }
+
+      /*
+        If this wallet has used all boost tokens for the race, block the button.
+      */
+      else if (
+        currentBoostTokens &&
+        Number(currentBoostTokens.remaining) <= 0
+      ) {
+        button.disabled = true;
+        button.textContent = "No Boost Tokens";
+      }
+
+      /*
+        Otherwise, voting is open and this car is valid for the current bet.
+      */
+      else {
+        button.disabled = false;
+        button.textContent = "Boost";
       }
     });
   }
@@ -2003,6 +2627,178 @@ function renderStateFromBackend() {
   6. race only starts when Start Race is clicked separately
 */
 
+/*
+  NEW RACE BET PANEL EVENTS
+
+  Stage 1:
+  - updates visual state
+  - does not submit bets yet
+*/
+betTypeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    selectedBetType = button.dataset.betType || "winner";
+    updateRaceBetPanel();
+  });
+});
+
+stakeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    selectedStakeAmount = Number(button.dataset.stake || 1);
+    updateRaceBetPanel();
+  });
+});
+
+winnerCarButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    selectedWinnerCarId = button.dataset.car || null;
+    updateRaceBetPanel();
+  });
+});
+
+trifectaFirstSelect?.addEventListener("change", () => {
+  selectedTrifectaOrder.first = trifectaFirstSelect.value;
+  updateRaceBetPanel();
+});
+
+trifectaSecondSelect?.addEventListener("change", () => {
+  selectedTrifectaOrder.second = trifectaSecondSelect.value;
+  updateRaceBetPanel();
+});
+
+trifectaThirdSelect?.addEventListener("change", () => {
+  selectedTrifectaOrder.third = trifectaThirdSelect.value;
+  updateRaceBetPanel();
+});
+
+/*
+  PLACE BET BUTTON
+
+  New central Race Bet Panel flow.
+
+  This replaces the old per-card dropdown betting flow once tested.
+*/
+placeBetBtn?.addEventListener("click", async () => {
+  const activeWallet = getActiveWallet();
+
+  if (!activeWallet) {
+    alert("Connect your wallet before placing a bet.");
+    return;
+  }
+
+  if (!hasInitialSync || currentState === null) {
+    await syncFromBackend();
+  }
+
+  if (currentState !== "idle" && currentState !== "starting") {
+    alert("Betting is closed for this race");
+    return;
+  }
+
+  const stakeAmount = selectedStakeAmount;
+
+  const betType = selectedBetType;
+
+  const carId =
+    betType === "winner"
+      ? selectedWinnerCarId
+      : null;
+
+  const trifectaOrder =
+    betType === "trifecta"
+      ? getSelectedTrifectaOrderArray()
+      : null;
+
+  if (betType === "winner" && !carId) {
+    alert("Choose a car for your winner bet.");
+    return;
+  }
+
+  if (betType === "trifecta" && !isSelectedTrifectaValid()) {
+    alert("Choose three different cars for your trifecta order.");
+    return;
+  }
+
+  try {
+    isSubmittingBet = true;
+
+    if (placeBetBtn) {
+      placeBetBtn.disabled = true;
+      placeBetBtn.textContent =
+        appConfig.appMode === "devnet"
+          ? "Waiting for Wallet..."
+          : "Placing Bet...";
+    }
+
+    setBetPendingMessage(
+      appConfig.appMode === "devnet"
+        ? "Preparing wallet transaction..."
+        : "Submitting bet..."
+    );
+
+    const betIntent = await createBetIntent({
+      wallet: activeWallet,
+      betType,
+      carId,
+      trifectaOrder,
+      stakeAmount
+    });
+
+    currentBetId = betIntent.betId;
+
+    setBetPendingMessage("Waiting for wallet approval...");
+
+    const confirmedBet = await submitBet(
+      betIntent.betId,
+      activeWallet,
+      stakeAmount
+    );
+
+    await refreshWalletBalance();
+
+    applyConfirmedBetToFrontendState({
+      betIntent,
+      confirmedBet,
+      fallbackBetType: betType,
+      fallbackCarId: carId,
+      fallbackTrifectaOrder: trifectaOrder,
+      stakeAmount
+    });
+
+    if (placeBetBtn) {
+      placeBetBtn.textContent =
+        betType === "winner"
+          ? "Winner Bet Placed"
+          : "Trifecta Bet Placed";
+    }
+  } catch (error) {
+    console.error("Race Bet Panel flow failed:", error);
+
+    isSubmittingBet = false;
+    currentBetId = null;
+    currentBetStatus = null;
+    currentBetDetails = null;
+    selectedCarId = null;
+    pendingRaceStartCarId = null;
+    lockedCarId = null;
+
+    localStorage.removeItem("lockedCarId");
+
+    renderIdleUI();
+    updateHud();
+    updateRaceBetPanel();
+
+    const friendlyMessage = getFriendlyWalletErrorMessage
+      ? getFriendlyWalletErrorMessage(error)
+      : error.message || "Bet failed";
+
+    boostTimer.textContent = friendlyMessage;
+    alert(friendlyMessage);
+  } finally {
+    isSubmittingBet = false;
+    updateRaceBetPanel();
+  }
+});
+
 carSelects.forEach((select) => {
   select.addEventListener("change", async () => {
     const chosenValue = select.value;
@@ -2063,11 +2859,12 @@ carSelects.forEach((select) => {
           ? "Preparing wallet transaction..."
           : "Submitting bet...";
 
-      const betIntent = await createBetIntent(
-        activeWallet,
-        chosenCarId,
+      const betIntent = await createBetIntent({
+        wallet: activeWallet,
+        betType: "winner",
+        carId: chosenCarId,
         stakeAmount
-      );
+      });
 
       currentBetId = betIntent.betId;
 
@@ -2075,82 +2872,32 @@ carSelects.forEach((select) => {
 
       boostTimer.textContent = "Waiting for wallet approval...";
 
-      await submitBet(
+      const confirmedBet = await submitBet(
         betIntent.betId,
         activeWallet,
         stakeAmount
       );
 
-      /*
-        Refresh the wallet balance after the bet transaction has completed.
-
-        Devnet v1:
-        - the balance should reduce slightly because the user paid SOL for the bet
-      */
       await refreshWalletBalance();
 
       /*
         Only now is the bet actually confirmed.
 
-        This point means:
-        - demo mode: mock submit succeeded
-        - devnet mode: wallet tx succeeded and /api/bet-submit accepted it
+        This shared helper updates:
+        - current bet state
+        - locked selected car
+        - HUD
+        - boost token HUD
+        - Start Race button
       */
-      currentBetStatus = "confirmed";
-      isSubmittingBet = false;
-
-      selectedCarId = chosenCarId;
-      pendingRaceStartCarId = null;
-      lockedCarId = chosenCarId;
-      localStorage.setItem("lockedCarId", lockedCarId);
-
-      /*
-        Locally update the HUD immediately after confirmed bet.
-
-        Backend truth will still be restored on the next sync, but this makes
-        the UI feel instant.
-      */
-      currentBetDetails = {
-        id: betIntent.betId,
-        race_id: betIntent.raceId,
-        cycle_id: betIntent.cycleId,
-
-        /*
-          Existing frontend is winner-bet only for now.
-          Later, trifecta UI will set bet_type and trifecta order.
-        */
-        bet_type: betIntent.betType || "winner",
-        car_id: chosenCarId,
-        trifecta_first_car_id: null,
-        trifecta_second_car_id: null,
-        trifecta_third_car_id: null,
-
-        token_symbol: betIntent.tokenSymbol,
-        stake_amount: stakeAmount,
-        payout_multiplier: betIntent.payoutMultiplier,
-        potential_payout: betIntent.potentialPayout,
-        status: "confirmed"
-      };
-
-      /*
-        If the backend returned boost-token info from confirmBetTx,
-        show it immediately.
-
-        Expected at this point:
-        3 / 3 reserved
-      */
-      if (betIntent.boostTokens) {
-        currentBoostTokens = betIntent.boostTokens;
-        updateBoostStrategyHud();
-      }
-
-      updateHud();
-
-      applyCarSelectionUI();
-
-      updateStartRaceButton();
-
-      boostTimer.textContent = `Bet submitted: ${stakeAmount} ${betIntent.tokenSymbol} on ${chosenCarId}`;
+      applyConfirmedBetToFrontendState({
+        betIntent,
+        confirmedBet,
+        fallbackBetType: "winner",
+        fallbackCarId: chosenCarId,
+        fallbackTrifectaOrder: null,
+        stakeAmount
+      });
 
       /*
         Do not immediately sync here while debugging.
@@ -2239,8 +2986,24 @@ boostButtons.forEach((button) => {
   button.addEventListener("click", async () => {
     if (currentState !== "voting") return;
 
-    const carId = lockedCarId || selectedCarId;
+    /*
+      Use the car from the clicked card, not the globally locked car.
+
+      This is required for trifecta bets because the user can boost
+      any car in their order.
+    */
+    const carId = button.closest(".car-card")?.dataset.car;
+
     if (!carId) return;
+
+    /*
+      Frontend UX guard.
+      Backend still enforces the actual rule.
+    */
+    if (!isCarAllowedForCurrentBet(carId)) {
+      alert("This car is not available for your current bet.");
+      return;
+    }
 
     try {
       isSubmittingVote = true;
@@ -2397,6 +3160,11 @@ async function initApp() {
       - wallet may not be connected yet
     */
     updateHud();
+
+    /*
+      Render the new Race Bet Panel initial state.
+    */
+    updateRaceBetPanel();
 
     /*
       Start backend polling first so the top bar and race UI render even if
