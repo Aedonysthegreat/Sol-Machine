@@ -114,75 +114,106 @@ CREATE TABLE IF NOT EXISTS votes (
 -- ============================================================
 -- Stores one betting record per wallet per race.
 --
--- Design rules for v1:
--- - one wallet can only place one bet per race
--- - one bet is tied to one chosen car
--- - stake amount must be one of the allowed preset amounts
--- - payment is verified later when the bet is submitted
+-- Bet types:
+-- - winner   = user picks one car to win
+-- - trifecta = user picks exact 1st / 2nd / 3rd order
 --
--- status meanings:
--- - pending_payment = bet intent created, waiting for payment verification
--- - confirmed       = bet accepted into the race
--- - won             = race completed and this bet won
--- - lost            = race completed and this bet lost
--- - refunded        = race cancelled/invalid and refund issued
--- - void            = bet invalidated before normal settlement
+-- Security:
+-- - one wallet can only place one bet per race
+-- - payout multiplier is stored at bet creation time
+-- - frontend does not decide payout
+-- - frontend does not decide boost access
 
 CREATE TABLE IF NOT EXISTS bets (
   id TEXT PRIMARY KEY,
 
-  -- Which race this bet belongs to.
   race_id INTEGER NOT NULL,
-
-  -- The cycle row that existed when the bet was created.
-  -- For your current setup this will likely be the idle/pre-race cycle.
   cycle_id INTEGER NOT NULL,
 
-  -- Wallet that placed the bet.
   wallet TEXT NOT NULL,
 
-  -- Car chosen for the bet.
+  -- winner or trifecta
+  bet_type TEXT NOT NULL CHECK (bet_type IN ('winner', 'trifecta')),
+
+  -- Used for winner bets.
+  -- For trifecta bets, this should match trifecta_first_car_id
+  -- so older frontend/HUD logic can still show a primary backed car.
   car_id TEXT NOT NULL,
 
-  -- Token used for the bet.
-  token_symbol TEXT NOT NULL,
+  -- Used for trifecta exact order.
+  -- For winner bets these can be null.
+  trifecta_first_car_id TEXT,
+  trifecta_second_car_id TEXT,
+  trifecta_third_car_id TEXT,
 
-  -- Stake amount chosen from your preset bet sizes.
+  token_symbol TEXT NOT NULL,
   stake_amount INTEGER NOT NULL,
 
-  -- Fixed payout multiplier stored at bet creation time.
   payout_multiplier REAL NOT NULL,
-
-  -- Precomputed possible return if the bet wins.
   potential_payout INTEGER NOT NULL,
 
-  -- Current bet lifecycle state.
   status TEXT NOT NULL CHECK (
     status IN ('pending_payment', 'confirmed', 'won', 'lost', 'refunded', 'void')
   ),
 
-  -- Payment proof fields.
   payment_tx_signature TEXT UNIQUE,
   message_signature TEXT,
 
-  -- Timestamps for creation and later settlement/refund.
   created_at TEXT NOT NULL,
   settled_at TEXT,
   refunded_at TEXT,
 
   FOREIGN KEY (cycle_id) REFERENCES cycles(id),
 
-  -- Hard stop: one wallet can only place one bet per race.
   UNIQUE (race_id, wallet)
 );
 
--- Useful for fetching bets during settlement.
 CREATE INDEX IF NOT EXISTS idx_bets_race_status
   ON bets (race_id, status);
 
--- Useful for wallet lookup screens or admin queries.
 CREATE INDEX IF NOT EXISTS idx_bets_wallet
   ON bets (wallet);
+
+-- ============================================================
+-- race_boost_balances
+-- ============================================================
+-- Internal website boost-token balance.
+--
+-- These are NOT crypto tokens.
+-- These are temporary race-specific voting credits.
+--
+-- Security:
+-- - backend is source of truth
+-- - tokens are tied to race + wallet + bet
+-- - tokens cannot transfer between races
+-- - users cannot buy more race-control power
+-- - tokens expire after race
+
+CREATE TABLE IF NOT EXISTS race_boost_balances (
+  race_id INTEGER NOT NULL,
+  wallet TEXT NOT NULL,
+  bet_id TEXT NOT NULL,
+
+  tokens_granted INTEGER NOT NULL DEFAULT 3,
+  tokens_spent INTEGER NOT NULL DEFAULT 0,
+
+  status TEXT NOT NULL CHECK (
+    status IN ('reserved', 'active', 'expired', 'void')
+  ),
+
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+
+  PRIMARY KEY (race_id, wallet),
+
+  FOREIGN KEY (bet_id) REFERENCES bets(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_race_boost_balances_bet
+  ON race_boost_balances (bet_id);
+
+CREATE INDEX IF NOT EXISTS idx_race_boost_balances_status
+  ON race_boost_balances (race_id, status);
 
 -- ============================================================
 -- race_results
@@ -203,14 +234,16 @@ CREATE INDEX IF NOT EXISTS idx_bets_wallet
 CREATE TABLE IF NOT EXISTS race_results (
   race_id INTEGER PRIMARY KEY,
 
-  -- Winning car for completed races.
-  -- Nullable so cancelled/invalid races do not need a winner.
+  -- Winner-only result support.
   winning_car_id TEXT,
+
+  -- Full finishing order support for trifecta.
+  first_car_id TEXT,
+  second_car_id TEXT,
+  third_car_id TEXT,
 
   status TEXT NOT NULL CHECK (status IN ('completed', 'cancelled', 'invalid')),
 
-  -- Identifies who/what submitted the result.
-  -- Example: 'car-backend', 'admin', 'manual-test'
   source TEXT NOT NULL,
 
   created_at TEXT NOT NULL

@@ -165,6 +165,23 @@ const hudTokenSymbol = document.getElementById("hudTokenSymbol");
 const hudWallet = document.getElementById("hudWallet");
 
 /*
+  BOOST STRATEGY HUD REFERENCES
+
+  These display:
+  - internal race boost-token balance
+  - live boost power percentages for each car
+
+  Important:
+  - boost-token balance is backend-owned
+  - boost power is currently a placeholder from the website backend
+  - later boost power can come from the car/race backend
+*/
+const hudBoostTokens = document.getElementById("hudBoostTokens");
+const hudBoostPowerCar1 = document.getElementById("hudBoostPowerCar1");
+const hudBoostPowerCar2 = document.getElementById("hudBoostPowerCar2");
+const hudBoostPowerCar3 = document.getElementById("hudBoostPowerCar3");
+
+/*
   ============================================================
   APP STATE
   ============================================================
@@ -255,6 +272,26 @@ let currentBetDetails = null;
 let latestSettledBetDetails = null;
 
 /*
+  BOOST STRATEGY HUD STATE
+
+  currentBoostTokens:
+    backend-owned internal boost-token balance for this wallet/race
+
+  currentBoostPower:
+    latest boost-power percentages for each car
+
+  These are display values only.
+  The frontend should never be trusted to enforce token spending.
+*/
+let currentBoostTokens = null;
+
+let currentBoostPower = {
+  "Car 1": null,
+  "Car 2": null,
+  "Car 3": null
+};
+
+/*
   ============================================================
   WALLET STATE
   ============================================================
@@ -297,6 +334,51 @@ function formatWalletBalance(balance) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 4
   });
+}
+
+/*
+  Converts wallet / Solana transaction errors into friendlier UI messages.
+*/
+function getFriendlyWalletErrorMessage(error) {
+  const rawMessage = String(
+    error?.message ||
+    error?.toString?.() ||
+    ""
+  );
+
+  const lowerMessage = rawMessage.toLowerCase();
+
+  /*
+    Common insufficient-funds wording can vary depending on Phantom,
+    Solana Web3.js, or the RPC response.
+  */
+  if (
+    lowerMessage.includes("insufficient") ||
+    lowerMessage.includes("insufficient funds") ||
+    lowerMessage.includes("attempt to debit an account but found no record of a prior credit") ||
+    lowerMessage.includes("custom program error") && lowerMessage.includes("0x1") ||
+    lowerMessage.includes("0x1")
+  ) {
+    return "Insufficient funds. Your wallet does not have enough SOL to cover this bet and the network fee.";
+  }
+
+  if (
+    lowerMessage.includes("user rejected") ||
+    lowerMessage.includes("rejected") ||
+    lowerMessage.includes("cancelled") ||
+    lowerMessage.includes("canceled")
+  ) {
+    return "Transaction cancelled. Your bet was not placed.";
+  }
+
+  if (
+    lowerMessage.includes("blockhash not found") ||
+    lowerMessage.includes("transaction expired")
+  ) {
+    return "Transaction expired. Please try placing the bet again.";
+  }
+
+  return error?.message || "Unexpected wallet error. Please try again.";
 }
 
 /*
@@ -848,6 +930,53 @@ function getStatusClass(status) {
 }
 
 /*
+  Formats the boost-token balance for the HUD.
+
+  Examples:
+  - no bet yet: —
+  - bet confirmed but race not started: 3 / 3 reserved
+  - race active: 2 / 3 active
+  - tokens used: 0 / 3 active
+*/
+function formatBoostTokens(boostTokens) {
+  if (!boostTokens) {
+    return "—";
+  }
+
+  const remaining = Number(boostTokens.remaining ?? 0);
+  const granted = Number(boostTokens.granted ?? 0);
+  const status = boostTokens.status || "—";
+
+  return `${remaining} / ${granted} ${status}`;
+}
+
+/*
+  Updates the Boost Strategy HUD panel.
+
+  This displays backend-owned token state and live boost power.
+*/
+function updateBoostStrategyHud() {
+  if (hudBoostTokens) {
+    hudBoostTokens.textContent = formatBoostTokens(currentBoostTokens);
+  }
+
+  if (hudBoostPowerCar1) {
+    hudBoostPowerCar1.textContent =
+      currentBoostPower["Car 1"] === null ? "—" : `${currentBoostPower["Car 1"]}%`;
+  }
+
+  if (hudBoostPowerCar2) {
+    hudBoostPowerCar2.textContent =
+      currentBoostPower["Car 2"] === null ? "—" : `${currentBoostPower["Car 2"]}%`;
+  }
+
+  if (hudBoostPowerCar3) {
+    hudBoostPowerCar3.textContent =
+      currentBoostPower["Car 3"] === null ? "—" : `${currentBoostPower["Car 3"]}%`;
+  }
+}
+
+/*
   Applies text + status class to a HUD status field.
 */
 function setHudStatus(el, status) {
@@ -1040,9 +1169,29 @@ async function sendDevnetBetPayment(stakeAmount) {
   );
 
   const fromPubkey = new web3.PublicKey(connectedWalletPublicKey);
-  const toPubkey = new web3.PublicKey(appConfig.treasuryWallet);
+const toPubkey = new web3.PublicKey(appConfig.treasuryWallet);
 
-  const lamports = Math.round(stakeAmount * 0.001 * web3.LAMPORTS_PER_SOL);
+const lamports = Math.round(stakeAmount * 0.001 * web3.LAMPORTS_PER_SOL);
+
+/*
+  Pre-check wallet balance before asking Phantom to approve the transaction.
+
+  This gives the user a clear error instead of a vague wallet/RPC failure.
+  We include a small estimated fee buffer so users do not spend their full
+  balance and fail on the network fee.
+*/
+const currentLamports = await connection.getBalance(fromPubkey, "confirmed");
+const estimatedFeeLamports = 5000;
+const totalRequiredLamports = lamports + estimatedFeeLamports;
+
+if (currentLamports < totalRequiredLamports) {
+  const currentSol = currentLamports / web3.LAMPORTS_PER_SOL;
+  const requiredSol = totalRequiredLamports / web3.LAMPORTS_PER_SOL;
+
+  throw new Error(
+    `Insufficient funds. You need at least ${requiredSol.toFixed(6)} SOL for this bet and network fee, but your wallet has ${currentSol.toFixed(6)} SOL.`
+  );
+}
 
   const transaction = new web3.Transaction().add(
     web3.SystemProgram.transfer({
@@ -1349,6 +1498,66 @@ async function submitVote(intentId, wallet) {
 }
 
 /*
+  Fetches this wallet's internal boost-token balance for the current race.
+
+  Example backend response:
+  {
+    raceId: 12,
+    wallet: "...",
+    boostTokens: {
+      granted: 3,
+      spent: 1,
+      remaining: 2,
+      status: "active"
+    }
+  }
+
+  Important:
+  This is only for display.
+  The backend still decides whether a vote is allowed.
+*/
+async function fetchBoostBalance(wallet) {
+  const res = await fetch(
+    `${API_BASE}/boost-balance?wallet=${encodeURIComponent(wallet)}`,
+    {
+      cache: "no-store"
+    }
+  );
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to fetch boost balance");
+  }
+
+  return data.boostTokens;
+}
+
+/*
+  Fetches current boost-power percentages for the race HUD.
+
+  For now the backend returns placeholder values:
+  Car 1: 100%
+  Car 2: 100%
+  Car 3: 100%
+
+  Later this endpoint can return real values from the car/race backend.
+*/
+async function fetchBoostPower() {
+  const res = await fetch(`${API_BASE}/boost-power/current`, {
+    cache: "no-store"
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || "Failed to fetch boost power");
+  }
+
+  return data.boostPower || [];
+}
+
+/*
   Fetch the most recent settled bet for this wallet.
 
   This lets the HUD show the latest race outcome even after
@@ -1375,10 +1584,14 @@ async function fetchLatestSettledBet(wallet) {
   Refreshes HUD-specific data from the backend.
 
   This fetches:
-  - current active bet
   - latest settled result
+  - current boost-token balance
+  - current boost-power values
 
   Then re-renders the HUD.
+
+  Important:
+  currentBetDetails is still refreshed by restoreCurrentBetFromBackend().
 */
 async function refreshHudData() {
   const activeWallet = getActiveWallet();
@@ -1386,17 +1599,51 @@ async function refreshHudData() {
   if (!activeWallet) {
     currentBetDetails = null;
     latestSettledBetDetails = null;
+    currentBoostTokens = null;
+    currentBoostPower = {
+      "Car 1": null,
+      "Car 2": null,
+      "Car 3": null
+    };
+
     updateHud();
+    updateBoostStrategyHud();
     return;
   }
 
   /*
-    currentBetDetails is already refreshed by restoreCurrentBetFromBackend().
-    Here we only fetch the latest settled result for the result panel.
+    Latest settled result powers the Race Result HUD.
   */
   latestSettledBetDetails = await fetchLatestSettledBet(activeWallet);
 
+  /*
+    Boost balance powers the Boost Tokens HUD.
+
+    If the user has no confirmed bet for the current race, the backend
+    returns boostTokens: null, which we display as "—".
+  */
+  currentBoostTokens = await fetchBoostBalance(activeWallet);
+
+  /*
+    Boost power powers the live car power display.
+
+    For now these are placeholder values from the backend.
+  */
+  const boostPowerRows = await fetchBoostPower();
+
+  currentBoostPower = {
+    "Car 1": null,
+    "Car 2": null,
+    "Car 3": null
+  };
+
+  boostPowerRows.forEach((row) => {
+    if (!row || !row.carId) return;
+    currentBoostPower[row.carId] = row.percent;
+  });
+
   updateHud();
+  updateBoostStrategyHud();
 }
 
 /*
@@ -1640,13 +1887,42 @@ function renderStateFromBackend() {
       if (!button) return;
 
       if (!activeCarId || carCard.dataset.car === activeCarId) {
+        /*
+          If this browser is currently submitting a vote, keep the button blocked.
+        */
         if (isSubmittingVote && submittingVoteCycleId === currentCycleId) {
           button.disabled = true;
-          button.textContent = "Submitting...";
-        } else if (votedCycleId === currentCycleId) {
+          button.textContent = "Submitting.";
+        }
+
+        /*
+          If this wallet has already voted in this cycle, block another vote.
+
+          Backend also enforces this with UNIQUE(cycle_id, wallet).
+        */
+        else if (votedCycleId === currentCycleId) {
           button.disabled = true;
           button.textContent = "Vote Submitted";
-        } else {
+        }
+
+        /*
+          If this wallet has used all boost tokens for the race,
+          block the button.
+
+          Backend still enforces this too, but this improves UX.
+        */
+        else if (
+          currentBoostTokens &&
+          Number(currentBoostTokens.remaining) <= 0
+        ) {
+          button.disabled = true;
+          button.textContent = "No Boost Tokens";
+        }
+
+        /*
+          Otherwise, voting is open and the user still has tokens.
+        */
+        else {
           button.disabled = false;
           button.textContent = "Boost";
         }
@@ -1829,20 +2105,44 @@ carSelects.forEach((select) => {
       localStorage.setItem("lockedCarId", lockedCarId);
 
       /*
-        Update current bet HUD data immediately so the panel changes
-        without waiting for the next polling cycle.
+        Locally update the HUD immediately after confirmed bet.
+
+        Backend truth will still be restored on the next sync, but this makes
+        the UI feel instant.
       */
       currentBetDetails = {
         id: betIntent.betId,
         race_id: betIntent.raceId,
         cycle_id: betIntent.cycleId,
+
+        /*
+          Existing frontend is winner-bet only for now.
+          Later, trifecta UI will set bet_type and trifecta order.
+        */
+        bet_type: betIntent.betType || "winner",
         car_id: chosenCarId,
+        trifecta_first_car_id: null,
+        trifecta_second_car_id: null,
+        trifecta_third_car_id: null,
+
         token_symbol: betIntent.tokenSymbol,
         stake_amount: stakeAmount,
         payout_multiplier: betIntent.payoutMultiplier,
         potential_payout: betIntent.potentialPayout,
         status: "confirmed"
       };
+
+      /*
+        If the backend returned boost-token info from confirmBetTx,
+        show it immediately.
+
+        Expected at this point:
+        3 / 3 reserved
+      */
+      if (betIntent.boostTokens) {
+        currentBoostTokens = betIntent.boostTokens;
+        updateBoostStrategyHud();
+      }
 
       updateHud();
 
@@ -1874,7 +2174,7 @@ carSelects.forEach((select) => {
 
       boostTimer.textContent = "Bet was not confirmed. Please try again.";
 
-      alert(error.message || "Bet failed");
+      alert(getFriendlyWalletErrorMessage(error));
     }
   });
 });
@@ -1949,10 +2249,48 @@ boostButtons.forEach((button) => {
       button.disabled = true;
       button.textContent = "Submitting...";
 
-      const intent = await createVoteIntent(DEMO_WALLET, carId);
+      /*
+        Use whichever wallet is active for the current app mode.
+
+        Demo mode:
+        - generated demo wallet
+
+        Devnet mode:
+        - connected real wallet public key
+      */
+      const activeWallet = getActiveWallet();
+
+      if (!activeWallet) {
+        throw new Error("Connect wallet before voting");
+      }
+
+      /*
+        Create vote intent.
+
+        Backend checks:
+        - voting is open
+        - wallet has confirmed bet
+        - selected car is allowed for bet type
+        - boost tokens are active
+        - tokens are remaining
+      */
+      const intent = await createVoteIntent(activeWallet, carId);
       currentVoteIntentId = intent.intentId;
 
-      const voteResult = await submitVote(intent.intentId, DEMO_WALLET);
+      /*
+        Submit vote.
+
+        Backend confirms the vote and spends 1 boost token.
+      */
+      const voteResult = await submitVote(intent.intentId, activeWallet);
+
+      /*
+        Immediately update local boost-token HUD from backend response.
+      */
+      if (voteResult.boostTokens) {
+        currentBoostTokens = voteResult.boostTokens;
+        updateBoostStrategyHud();
+      }
 
       votedCycleId = voteResult.cycleId;
       localStorage.setItem("votedCycleId", String(votedCycleId));

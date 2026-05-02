@@ -122,10 +122,13 @@ function isValidPublicKeyString(value) {
 const STARTING_DURATION_MS = 20 * 1000;
 const VOTING_DURATION_MS = 20 * 1000;
 const FINALIZING_DURATION_MS = 3 * 1000;
-const BOOST_DURATION_MS = 10 * 1000;
+const BOOST_DURATION_MS = 3 * 1000;
 
 // Number of boost cycles per race before returning to idle.
 const CYCLES_PER_RACE = 3;
+
+// Each confirmed bettor gets this many internal boost tokens per race.
+const BOOST_TOKENS_PER_RACE = 1;
 
 // How long a vote intent stays valid before expiring.
 // This stops old intents being reused long after they were created.
@@ -145,10 +148,11 @@ const ALLOWED_CARS = new Set(["Car 1", "Car 2", "Car 3"]);
   ------------------------------------------------------------
   BETTING RULES
   ------------------------------------------------------------
-  These define the first betting version:
+  These define the second betting version:
   - one token only
   - preset stake sizes only
   - fixed payout multiplier
+  - both single car bet and trifecta bet
 */
 
 /*
@@ -163,9 +167,17 @@ const TOKEN_SYMBOL = process.env.TOKEN_SYMBOL || "BOOST";
 // Adjust these later to match your actual token design.
 const ALLOWED_BET_AMOUNTS = new Set([1, 5, 10]);
 
-// Fixed payout multiplier for now.
-// Example: stake 5 tokens -> potential payout 10 tokens.
-const FIXED_PAYOUT_MULTIPLIER = 2.0;
+// single and trifecta bets
+const BET_TYPES = new Set(["winner", "trifecta"]);
+
+const WINNER_PAYOUT_MULTIPLIER = 2.0;
+const TRIFECTA_PAYOUT_MULTIPLIER = 5.0;
+
+function getPayoutMultiplierForBetType(betType) {
+  if (betType === "winner") return WINNER_PAYOUT_MULTIPLIER;
+  if (betType === "trifecta") return TRIFECTA_PAYOUT_MULTIPLIER;
+  return null;
+}
 
 /*
   ------------------------------------------------------------
@@ -343,6 +355,43 @@ function settleConfirmedBetsForRace(raceId, winningCarId, raceResultState) {
   };
 }
 
+function getConfirmedBetForWalletRace(wallet, raceId) {
+  return db.prepare(`
+    SELECT *
+    FROM bets
+    WHERE wallet = ?
+      AND race_id = ?
+      AND status = 'confirmed'
+    LIMIT 1
+  `).get(wallet, raceId);
+}
+
+function getBoostBalance(wallet, raceId) {
+  return db.prepare(`
+    SELECT *
+    FROM race_boost_balances
+    WHERE wallet = ? AND race_id = ?
+  `).get(wallet, raceId);
+}
+
+function isCarAllowedForBet(bet, carId) {
+  if (!bet || !isValidCarId(carId)) return false;
+
+  if (bet.bet_type === "winner") {
+    return bet.car_id === carId;
+  }
+
+  if (bet.bet_type === "trifecta") {
+    return (
+      bet.trifecta_first_car_id === carId ||
+      bet.trifecta_second_car_id === carId ||
+      bet.trifecta_third_car_id === carId
+    );
+  }
+
+  return false;
+}
+
 /*
   ------------------------------------------------------------
   VOTE / WINNER LOGIC
@@ -497,6 +546,59 @@ function isValidBetAmount(amount) {
 }
 
 /*
+  Checks whether bet is single car or trifecta
+*/
+function isValidBetType(betType) {
+  return typeof betType === "string" && BET_TYPES.has(betType);
+}
+
+function areUniqueCars(carIds) {
+  return Array.isArray(carIds) && new Set(carIds).size === carIds.length;
+}
+
+function isValidTrifectaOrder(order) {
+  if (!Array.isArray(order)) return false;
+  if (order.length !== 3) return false;
+  if (!areUniqueCars(order)) return false;
+  return order.every((carId) => isValidCarId(carId));
+}
+
+function normalizeBetSelection({ betType, carId, trifectaOrder }) {
+  if (betType === "winner") {
+    if (!isValidCarId(carId)) {
+      return { ok: false, error: "Winner bets require a valid carId" };
+    }
+
+    return {
+      ok: true,
+      primaryCarId: carId,
+      trifectaFirstCarId: null,
+      trifectaSecondCarId: null,
+      trifectaThirdCarId: null
+    };
+  }
+
+  if (betType === "trifecta") {
+    if (!isValidTrifectaOrder(trifectaOrder)) {
+      return {
+        ok: false,
+        error: "Trifecta bets require exactly 3 unique valid cars"
+      };
+    }
+
+    return {
+      ok: true,
+      primaryCarId: trifectaOrder[0],
+      trifectaFirstCarId: trifectaOrder[0],
+      trifectaSecondCarId: trifectaOrder[1],
+      trifectaThirdCarId: trifectaOrder[2]
+    };
+  }
+
+  return { ok: false, error: "Invalid bet type" };
+}
+
+/*
   Returns the current race ID from the latest cycle.
   This is helpful when looking up whether a wallet already bet in this race.
 */
@@ -583,18 +685,45 @@ function requireAdmin(req, res, next) {
   - verify it matches the stored intent
 */
 
+/*
+  verifyVoteProof()
+
+  Boost votes are NOT on-chain.
+
+  Betting can still be verified on-chain in devnet mode, but boost votes
+  are internal website actions powered by backend-owned race boost tokens.
+
+  This means:
+  - no wallet popup for boost votes
+  - no Solana transaction for boost votes
+  - no on-chain verification for boost votes
+  - backend still securely enforces:
+      confirmed bet required
+      boost tokens remaining
+      one vote per cycle
+      allowed car for bet type
+
+  We still sanity-check the placeholder signatures so the route shape
+  stays compatible with the current frontend.
+*/
 function verifyVoteProof({ wallet, txSignature, messageSignature, intent }) {
-  if (DEMO_MODE) {
-    return { ok: true };
+  if (!isValidWallet(wallet)) {
+    return { ok: false, error: "Invalid wallet" };
   }
 
-  // Placeholder so variables are intentionally "used" for now.
-  void wallet;
-  void txSignature;
-  void messageSignature;
-  void intent;
+  if (!intent || intent.wallet !== wallet) {
+    return { ok: false, error: "Vote intent does not match wallet" };
+  }
 
-  return { ok: false, error: "On-chain verification not implemented" };
+  if (!isValidSignature(txSignature)) {
+    return { ok: false, error: "Invalid vote signature" };
+  }
+
+  if (!isValidSignature(messageSignature)) {
+    return { ok: false, error: "Invalid vote message signature" };
+  }
+
+  return { ok: true };
 }
 
 /*
@@ -750,52 +879,183 @@ const createVoteIntentTx = db.transaction(({ cycleId, wallet, carId }) => {
 });
 
 /*
-  Confirm vote transaction:
-  - ensures the intent is still active
-  - ensures it belongs to the CURRENT cycle
-  - ensures the intent has not expired
-  - ensures the wallet has not already voted
-  - inserts confirmed vote
-  - marks intent as confirmed
+  confirmVoteTx
 
-  Using intent.cycle_id here is important.
-  That stops an old intent from being incorrectly applied to a different cycle.
+  Confirms a boost vote and spends 1 internal boost token.
+
+  This is the main security gate for boost voting.
+
+  It enforces:
+  - vote intent must still be active
+  - vote intent must belong to the current cycle
+  - vote intent must not be expired
+  - wallet must not have already voted this cycle
+  - wallet must have a confirmed bet for this race
+  - selected car must be allowed by the bet type
+  - boost tokens must be active for this race
+  - wallet must have at least 1 boost token remaining
+  - one successful vote spends exactly 1 boost token
+
+  This runs inside a database transaction so the vote insert and token spend
+  happen together. That helps stop double-click/spam race conditions.
 */
-const confirmVoteTx = db.transaction(({ cycle, intent, wallet, txSignature, messageSignature }) => {
+const confirmVoteTx = db.transaction(({
+  cycle,
+  intent,
+  wallet,
+  txSignature,
+  messageSignature
+}) => {
+  /*
+    The intent must still be waiting to be used.
+
+    If it was confirmed, rejected, or expired already, block it.
+  */
   if (intent.status !== "created") {
     const err = new Error("Vote intent is no longer active");
     err.statusCode = 400;
     throw err;
   }
 
+  /*
+    The intent must belong to the current cycle.
+
+    This prevents old vote intents from previous cycles being reused.
+  */
   if (intent.cycle_id !== cycle.id) {
     const err = new Error("Vote intent does not belong to the current cycle");
     err.statusCode = 400;
     throw err;
   }
 
+  /*
+    Expire stale vote intents.
+
+    This stops someone creating an intent during voting, waiting too long,
+    and then trying to confirm it later.
+  */
   const intentAgeMs = nowMs() - safeParseMs(intent.created_at);
 
   if (intentAgeMs > INTENT_EXPIRY_MS) {
-    db.prepare(`UPDATE vote_intents SET status = 'expired' WHERE id = ?`).run(intent.id);
+    db.prepare(`
+      UPDATE vote_intents SET status = 'expired' WHERE id = ?
+    `).run(intent.id);
+
     const err = new Error("Vote intent has expired");
     err.statusCode = 400;
     throw err;
   }
 
+  /*
+    One vote per wallet per cycle.
+
+    Your votes table also has UNIQUE(cycle_id, wallet), but this gives
+    a cleaner controlled error before the insert fails.
+  */
   const existingVote = db.prepare(`
     SELECT id FROM votes WHERE cycle_id = ? AND wallet = ?
   `).get(intent.cycle_id, wallet);
 
   if (existingVote) {
-    db.prepare(`UPDATE vote_intents SET status = 'rejected' WHERE id = ?`).run(intent.id);
+    db.prepare(`
+      UPDATE vote_intents SET status = 'rejected' WHERE id = ?
+    `).run(intent.id);
+
     const err = new Error("Wallet has already voted this cycle");
     err.statusCode = 400;
     throw err;
   }
 
+  /*
+    The wallet must have a confirmed bet for this race.
+
+    This stops people with no bet from influencing the race.
+  */
+  const bet = getConfirmedBetForWalletRace(wallet, cycle.race_id);
+
+  if (!bet) {
+    db.prepare(`
+      UPDATE vote_intents SET status = 'rejected' WHERE id = ?
+    `).run(intent.id);
+
+    const err = new Error("Wallet does not have a confirmed bet for this race");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  /*
+    Check whether this bet type allows boosting the selected car.
+
+    Winner bet:
+    - can only boost its selected winner car
+
+    Trifecta bet:
+    - can boost any of the 3 cars in the selected finishing order
+  */
+  if (!isCarAllowedForBet(bet, intent.car_id)) {
+    db.prepare(`
+      UPDATE vote_intents SET status = 'rejected' WHERE id = ?
+    `).run(intent.id);
+
+    const err = new Error("This bet type cannot boost that car");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  /*
+    Fetch this wallet's boost-token balance for this race.
+
+    The balance must exist and be active.
+  */
+  const balance = getBoostBalance(wallet, cycle.race_id);
+
+  if (!balance || balance.status !== "active") {
+    db.prepare(`
+      UPDATE vote_intents SET status = 'rejected' WHERE id = ?
+    `).run(intent.id);
+
+    const err = new Error("Boost tokens are not active for this race");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  /*
+    Check whether the wallet has any boost tokens left.
+
+    Example:
+    granted = 3
+    spent = 2
+    remaining = 1
+
+    If remaining is 0, the user has used all boost votes for this race.
+  */
+  const tokensRemaining = balance.tokens_granted - balance.tokens_spent;
+
+  if (tokensRemaining <= 0) {
+    db.prepare(`
+      UPDATE vote_intents SET status = 'rejected' WHERE id = ?
+    `).run(intent.id);
+
+    const err = new Error("No boost tokens remaining");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  /*
+    Store the confirmed vote.
+
+    This is the vote that counts toward deciding which car gets the boost.
+  */
   db.prepare(`
-    INSERT INTO votes (cycle_id, wallet, car_id, tx_signature, message_signature, status, created_at)
+    INSERT INTO votes (
+      cycle_id,
+      wallet,
+      car_id,
+      tx_signature,
+      message_signature,
+      status,
+      created_at
+    )
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     intent.cycle_id,
@@ -807,44 +1067,86 @@ const confirmVoteTx = db.transaction(({ cycle, intent, wallet, txSignature, mess
     nowIso()
   );
 
+  /*
+    Spend exactly 1 internal boost token.
+
+    This happens in the same transaction as the vote insert.
+    So if either operation fails, the whole transaction rolls back.
+  */
+  db.prepare(`
+    UPDATE race_boost_balances
+    SET tokens_spent = tokens_spent + 1,
+        updated_at = ?
+    WHERE race_id = ? AND wallet = ?
+  `).run(nowIso(), cycle.race_id, wallet);
+
+  /*
+    Mark the intent as used successfully.
+  */
   db.prepare(`
     UPDATE vote_intents SET status = 'confirmed' WHERE id = ?
   `).run(intent.id);
 
+  /*
+    Return the updated balance so the frontend can immediately update
+    the HUD without waiting for another poll.
+  */
+  const updatedBalance = getBoostBalance(wallet, cycle.race_id);
+
   return {
     cycleId: intent.cycle_id,
-    carId: intent.car_id
+    raceId: cycle.race_id,
+    carId: intent.car_id,
+    boostTokens: {
+      granted: updatedBalance.tokens_granted,
+      spent: updatedBalance.tokens_spent,
+      remaining: updatedBalance.tokens_granted - updatedBalance.tokens_spent,
+      status: updatedBalance.status
+    }
   };
 });
 
 /*
-  Create bet intent transaction.
+  createBetIntentTx
 
-  What it does:
-  - ensures this wallet has not already bet in the current race
-  - calculates potential payout
-  - inserts a new bet in pending_payment state
+  Creates a pending bet record before payment has been confirmed.
 
-  Why pending_payment?
-  Because this mirrors your current vote flow:
-  1. create intent
-  2. later submit payment proof
-  3. backend confirms the bet
+  This supports two bet types:
+
+  1. winner
+     - user picks one car to win
+     - pays 2x
+
+  2. trifecta
+     - user picks exact 1st / 2nd / 3rd order
+     - pays 5x
+
+  Important security notes:
+  - The frontend does NOT decide the payout multiplier.
+  - The frontend does NOT decide potential payout.
+  - The backend validates the bet type and selected cars.
+  - The backend stores the multiplier at bet creation time.
+  - One wallet can only have one bet per race.
+
+  Pending bet behaviour:
+  - If the wallet already has a confirmed bet, block a new bet.
+  - If the wallet has an old pending_payment bet, delete it and replace it.
+    This lets the user change their mind before payment is confirmed.
 */
-const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stakeAmount }) => {
+const createBetIntentTx = db.transaction(({
+  raceId,
+  cycleId,
+  wallet,
+  betType,
+  carId,
+  trifectaOrder,
+  stakeAmount
+}) => {
   /*
-    Check whether this wallet already has a bet for this race.
+    Check if this wallet already has a bet for this race.
 
-    Important devnet behaviour:
-    - confirmed/won/lost/refunded bets should block another bet
-    - pending_payment should NOT permanently block the user
-
-    Why:
-    In devnet mode, the flow is:
-    create bet intent -> wallet transaction -> submit proof
-
-    If the user cancels the wallet popup, closes Phantom, or the payment fails,
-    the pending_payment bet would otherwise soft-lock them out of betting again.
+    The UNIQUE(race_id, wallet) database rule protects this too,
+    but checking here lets us return a nicer error message.
   */
   const existingBet = db.prepare(`
     SELECT id, status
@@ -854,6 +1156,10 @@ const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stak
     LIMIT 1
   `).get(raceId, wallet);
 
+  /*
+    If the wallet already has a real active/confirmed/settled bet,
+    do not allow a second bet for the same race.
+  */
   if (existingBet && existingBet.status !== "pending_payment") {
     const err = new Error("Wallet has already placed a bet for this race");
     err.statusCode = 400;
@@ -861,9 +1167,14 @@ const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stak
   }
 
   /*
-    Remove stale pending_payment bets before creating a new one.
+    If there is an unfinished pending bet, remove it.
 
-    This lets the user retry if the wallet payment did not complete.
+    Example:
+    - user selected Car 1
+    - wallet/payment was cancelled
+    - user then selects Car 2
+
+    This prevents old pending bets from blocking a fresh attempt.
   */
   if (existingBet && existingBet.status === "pending_payment") {
     db.prepare(`
@@ -872,10 +1183,54 @@ const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stak
     `).run(existingBet.id);
   }
 
-  const betId = nanoid();
+  /*
+    Normalize and validate the selected bet.
 
-  // Precompute the possible return now so the value is locked in at bet time.
-  const potentialPayout = Math.floor(stakeAmount * FIXED_PAYOUT_MULTIPLIER);
+    For winner:
+    - requires one valid carId
+
+    For trifecta:
+    - requires exactly 3 unique valid cars
+    - stores the first car as the primary car_id
+      so older HUD code can still show a backed/primary car.
+  */
+  const normalized = normalizeBetSelection({
+    betType,
+    carId,
+    trifectaOrder
+  });
+
+  if (!normalized.ok) {
+    const err = new Error(normalized.error);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  /*
+    Get the payout multiplier from backend rules.
+
+    Winner = 2x
+    Trifecta = 5x
+
+    This must stay backend-controlled so users cannot alter payout
+    by editing frontend JavaScript.
+  */
+  const payoutMultiplier = getPayoutMultiplierForBetType(betType);
+
+  if (payoutMultiplier === null) {
+    const err = new Error("Invalid payout multiplier");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  /*
+    Create the pending bet.
+
+    potentialPayout is precomputed and stored so settlement can refer
+    to the value that was valid at the time the bet was created.
+  */
+  const betId = nanoid();
+  const potentialPayout = Math.floor(stakeAmount * payoutMultiplier);
 
   db.prepare(`
     INSERT INTO bets (
@@ -883,7 +1238,11 @@ const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stak
       race_id,
       cycle_id,
       wallet,
+      bet_type,
       car_id,
+      trifecta_first_car_id,
+      trifecta_second_car_id,
+      trifecta_third_car_id,
       token_symbol,
       stake_amount,
       payout_multiplier,
@@ -895,16 +1254,20 @@ const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stak
       settled_at,
       refunded_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     betId,
     raceId,
     cycleId,
     wallet,
-    carId,
+    betType,
+    normalized.primaryCarId,
+    normalized.trifectaFirstCarId,
+    normalized.trifectaSecondCarId,
+    normalized.trifectaThirdCarId,
     TOKEN_SYMBOL,
     stakeAmount,
-    FIXED_PAYOUT_MULTIPLIER,
+    payoutMultiplier,
     potentialPayout,
     "pending_payment",
     null,
@@ -914,48 +1277,159 @@ const createBetIntentTx = db.transaction(({ raceId, cycleId, wallet, carId, stak
     null
   );
 
+  /*
+    Return enough information for the frontend to show the pending bet.
+
+    The returned values are still not final until the bet is confirmed.
+  */
   return {
     betId,
+    raceId,
+    cycleId,
+    betType,
+    carId: normalized.primaryCarId,
+    trifectaOrder:
+      betType === "trifecta"
+        ? [
+            normalized.trifectaFirstCarId,
+            normalized.trifectaSecondCarId,
+            normalized.trifectaThirdCarId
+          ]
+        : null,
+    tokenSymbol: TOKEN_SYMBOL,
+    stakeAmount,
+    payoutMultiplier,
     potentialPayout
   };
 });
 
 /*
-  Confirm bet transaction.
+  confirmBetTx
 
-  What it does:
-  - checks the bet is still awaiting payment
-  - checks it belongs to the current race
-  - stores payment proof fields
-  - marks the bet as confirmed
+  Confirms a pending bet after payment verification succeeds.
 
-  This is the point where the bet becomes "real" for the race.
+  This does two important things:
+
+  1. Updates the bet:
+     pending_payment -> confirmed
+
+  2. Creates internal race boost tokens:
+     - 3 tokens granted
+     - 0 spent
+     - status = reserved
+
+  Important:
+  These boost tokens are NOT crypto tokens.
+  They are internal race-specific voting credits.
+
+  Security notes:
+  - Boost tokens are tied to race_id + wallet + bet_id.
+  - They cannot transfer to another race.
+  - They cannot be edited by the frontend.
+  - They start as reserved and only become active when the race starts.
 */
-const confirmBetTx = db.transaction(({ bet, raceId, paymentTxSignature, messageSignature }) => {
+const confirmBetTx = db.transaction(({
+  bet,
+  raceId,
+  paymentTxSignature,
+  messageSignature
+}) => {
+  /*
+    Only pending bets can be confirmed.
+
+    This prevents already confirmed/won/lost/refunded bets from being
+    modified by calling the confirmation endpoint again.
+  */
   if (bet.status !== "pending_payment") {
     const err = new Error("Bet is no longer awaiting payment");
     err.statusCode = 400;
     throw err;
   }
 
+  /*
+    Make sure the bet still belongs to the current race.
+
+    This prevents a stale bet confirmation from being applied after
+    the backend has moved to another race.
+  */
   if (bet.race_id !== raceId) {
     const err = new Error("Bet does not belong to the current race");
     err.statusCode = 400;
     throw err;
   }
 
+  const now = nowIso();
+
+  /*
+    Mark the bet as confirmed and store the payment proof.
+
+    In demo mode the proof may be mock data.
+    In devnet mode this should be a real verified transaction signature.
+  */
   db.prepare(`
     UPDATE bets
     SET status = ?, payment_tx_signature = ?, message_signature = ?
     WHERE id = ?
   `).run("confirmed", paymentTxSignature, messageSignature, bet.id);
 
+  /*
+    Create the player's internal boost-token balance for this race.
+
+    Status is "reserved" because the race may not have started yet.
+
+    The tokens become usable only when:
+    - the race starts
+    - this row is changed to status = 'active'
+    - the current cycle state is voting
+  */
+  db.prepare(`
+    INSERT INTO race_boost_balances (
+      race_id,
+      wallet,
+      bet_id,
+      tokens_granted,
+      tokens_spent,
+      status,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    bet.race_id,
+    bet.wallet,
+    bet.id,
+    BOOST_TOKENS_PER_RACE,
+    0,
+    "reserved",
+    now,
+    now
+  );
+
+  /*
+    Return confirmed bet details for frontend/HUD updates.
+  */
   return {
     betId: bet.id,
     raceId: bet.race_id,
+    betType: bet.bet_type,
     carId: bet.car_id,
+    trifectaOrder:
+      bet.bet_type === "trifecta"
+        ? [
+            bet.trifecta_first_car_id,
+            bet.trifecta_second_car_id,
+            bet.trifecta_third_car_id
+          ]
+        : null,
     stakeAmount: bet.stake_amount,
-    potentialPayout: bet.potential_payout
+    payoutMultiplier: bet.payout_multiplier,
+    potentialPayout: bet.potential_payout,
+    boostTokens: {
+      granted: BOOST_TOKENS_PER_RACE,
+      spent: 0,
+      remaining: BOOST_TOKENS_PER_RACE,
+      status: "reserved"
+    }
   };
 });
 
@@ -1272,6 +1746,26 @@ app.post("/api/race/start", (req, res) => {
   setCurrentCycleToStarting(cycle.id);
 
   /*
+  Activate internal boost tokens for this race.
+
+  Boost balances are created as "reserved" when bets are confirmed.
+  Once the race starts, they become "active".
+
+  This means:
+  - users can place bets before the race starts
+  - their boost tokens are prepared
+  - but they cannot spend boost tokens until the race actually starts
+
+  This also prevents users from receiving global reusable tokens.
+  Tokens are always tied to one specific race.
+*/
+db.prepare(`
+  UPDATE race_boost_balances
+  SET status = 'active', updated_at = ?
+  WHERE race_id = ? AND status = 'reserved'
+`).run(nowIso(), cycle.race_id);
+
+  /*
     Return the new cycle state so the frontend can immediately update
     without waiting for the next polling interval.
   */
@@ -1283,19 +1777,48 @@ app.post("/api/race/start", (req, res) => {
 
 /*
   POST /api/vote-intent
-  Creates a short-lived intent for a wallet to vote for a car.
-  This is the first step before actual vote submission.
+
+  Creates a temporary vote intent for the current voting cycle.
+
+  This does NOT count as a confirmed vote yet.
+
+  Flow:
+  1. Frontend asks to create vote intent.
+  2. Backend checks voting is open.
+  3. Backend checks wallet/car/bet/token permissions.
+  4. Backend creates vote_intents row.
+  5. Frontend later confirms the vote.
+
+  Why have a vote intent?
+  - keeps the vote flow clean
+  - prevents old/random confirmations
+  - binds wallet + car + cycle together before final confirmation
 */
 app.post("/api/vote-intent", (req, res) => {
+  /*
+    Advance the backend state machine first.
+
+    Example:
+    If the voting timer has expired, this may move the race into finalizing,
+    and voting should no longer be allowed.
+  */
   advanceCycleIfNeeded();
   const cycle = getCurrentCycle();
 
+  /*
+    Votes can only be created while the current state is voting.
+  */
   if (cycle.state !== "voting") {
     return res.status(400).json({ error: "Voting is not open" });
   }
 
   const { wallet, carId } = req.body ?? {};
 
+  /*
+    Validate wallet and car input.
+
+    Never trust frontend values.
+  */
   if (!isValidWallet(wallet)) {
     return res.status(400).json({ error: "Invalid wallet" });
   }
@@ -1304,7 +1827,61 @@ app.post("/api/vote-intent", (req, res) => {
     return res.status(400).json({ error: "Invalid carId" });
   }
 
+  /*
+    Wallet must have a confirmed bet for this race before it can vote.
+  */
+  const bet = getConfirmedBetForWalletRace(wallet, cycle.race_id);
+
+  if (!bet) {
+    return res.status(400).json({
+      error: "You need a confirmed bet for this race before voting"
+    });
+  }
+
+  /*
+    Enforce bet-type boost permissions.
+
+    Winner bet:
+    - only selected winner car
+
+    Trifecta bet:
+    - any car in trifecta order
+  */
+  if (!isCarAllowedForBet(bet, carId)) {
+    return res.status(400).json({
+      error: "This bet type cannot boost that car"
+    });
+  }
+
+  /*
+    Check backend-owned boost-token balance.
+
+    Tokens must be active, meaning the race has started.
+  */
+  const balance = getBoostBalance(wallet, cycle.race_id);
+
+  if (!balance || balance.status !== "active") {
+    return res.status(400).json({
+      error: "Boost tokens are not active for this race"
+    });
+  }
+
+  /*
+    Check whether the wallet has any boost tokens left.
+  */
+  if (balance.tokens_spent >= balance.tokens_granted) {
+    return res.status(400).json({
+      error: "No boost tokens remaining"
+    });
+  }
+
   try {
+    /*
+      Create the vote intent.
+
+      This transaction also checks that the wallet has not already voted
+      in this cycle and does not already have an active intent.
+    */
     const intentId = createVoteIntentTx({
       cycleId: cycle.id,
       wallet,
@@ -1317,7 +1894,22 @@ app.post("/api/vote-intent", (req, res) => {
       raceId: cycle.race_id,
       cycleNumber: cycle.cycle_number,
       carId,
-      tokenCost: 1
+
+      /*
+        Each confirmed vote will cost 1 internal boost token.
+      */
+      tokenCost: 1,
+
+      /*
+        Return current token balance for the frontend HUD.
+        Note: tokens are not spent until the vote is confirmed.
+      */
+      boostTokens: {
+        granted: balance.tokens_granted,
+        spent: balance.tokens_spent,
+        remaining: balance.tokens_granted - balance.tokens_spent,
+        status: balance.status
+      }
     });
   } catch (error) {
     return res.status(error.statusCode || 500).json({
@@ -1398,9 +1990,10 @@ app.post("/api/vote-submit", (req, res) => {
     return res.json({
       success: true,
       cycleId: result.cycleId,
-      raceId: cycle.race_id,
+      raceId: result.raceId || cycle.race_id,
       cycleNumber: cycle.cycle_number,
-      carId: result.carId
+      carId: result.carId,
+      boostTokens: result.boostTokens || null
     });
   } catch (error) {
     // If two requests race each other, SQLite unique constraints may fire.
@@ -1418,63 +2011,109 @@ app.post("/api/vote-submit", (req, res) => {
 /*
   POST /api/bet-intent
 
-  Creates a pending bet record before payment is verified.
+  Creates a pending bet before payment confirmation.
 
-  Request body:
+  Supports both request shapes:
+
+  Existing winner-bet frontend:
   {
-    wallet: string,
-    carId: string,
-    stakeAmount: integer
+    wallet,
+    carId,
+    stakeAmount
   }
 
-  Rules enforced here:
-  - betting must still be open
-  - wallet must be valid
-  - chosen car must be valid
-  - stake amount must be one of the preset allowed sizes
-  - one wallet can only have one bet per race
+  New trifecta frontend later:
+  {
+    wallet,
+    betType: "trifecta",
+    trifectaOrder: ["Car 2", "Car 1", "Car 3"],
+    stakeAmount
+  }
+
+  If betType is omitted, it defaults to "winner".
+  This keeps your current frontend working while you build the new UI.
 */
 app.post("/api/bet-intent", (req, res) => {
+  /*
+    Move backend state forward if any timers have expired.
+  */
   advanceCycleIfNeeded();
+
   const cycle = getCurrentCycle();
 
+  /*
+    Only allow betting while race is idle or starting.
+
+    Current rule:
+    - idle = betting open
+    - starting = betting still open during countdown
+    - voting/finalizing/boost = betting locked
+  */
   if (!isRaceOpenForBetting(cycle)) {
-    return res.status(400).json({ error: "Betting is not open" });
+    return res.status(400).json({
+      error: "Betting is closed for this race"
+    });
   }
 
-  const { wallet, carId, stakeAmount } = req.body ?? {};
+  /*
+    Backward-compatible input handling.
 
+    Existing frontend does not send betType yet,
+    so default to "winner".
+  */
+  const {
+    wallet,
+    betType = "winner",
+    carId = null,
+    trifectaOrder = null,
+    stakeAmount
+  } = req.body ?? {};
+
+  /*
+    Validate wallet.
+  */
   if (!isValidWallet(wallet)) {
     return res.status(400).json({ error: "Invalid wallet" });
   }
 
-  if (!isValidCarId(carId)) {
-    return res.status(400).json({ error: "Invalid carId" });
+  /*
+    Validate bet type:
+    - winner
+    - trifecta
+  */
+  if (!isValidBetType(betType)) {
+    return res.status(400).json({ error: "Invalid bet type" });
   }
 
+  /*
+    Validate stake amount.
+    Current allowed amounts are still: 1, 5, 10.
+  */
   if (!isValidBetAmount(stakeAmount)) {
-    return res.status(400).json({ error: "Invalid stakeAmount" });
+    return res.status(400).json({ error: "Invalid stake amount" });
   }
 
+  /*
+    Create the pending bet.
+
+    createBetIntentTx validates:
+    - winner selected car
+    - trifecta order
+    - payout multiplier
+    - one bet per wallet per race
+  */
   try {
     const result = createBetIntentTx({
       raceId: cycle.race_id,
       cycleId: cycle.id,
       wallet,
+      betType,
       carId,
+      trifectaOrder,
       stakeAmount
     });
 
-    return res.json({
-      betId: result.betId,
-      raceId: cycle.race_id,
-      cycleId: cycle.id,
-      carId,
-      stakeAmount,
-      tokenSymbol: TOKEN_SYMBOL,
-      payoutMultiplier: FIXED_PAYOUT_MULTIPLIER,
-      potentialPayout: result.potentialPayout
-    });
+    return res.json(result);
   } catch (error) {
     return res.status(error.statusCode || 500).json({
       error: error.message || "Failed to create bet intent"
@@ -1670,6 +2309,110 @@ app.get("/api/bet/latest-settled", (req, res) => {
 
   return res.json({
     bet: bet || null
+  });
+});
+
+/*
+  GET /api/boost-balance?wallet=...
+
+  Returns the current wallet's internal boost-token balance
+  for the current race.
+
+  This is used by the frontend HUD to show:
+
+  Boost Tokens: 2 / 3
+
+  Important:
+  - This endpoint only displays backend state.
+  - The frontend must not calculate or enforce token balance itself.
+  - confirmVoteTx is still the real security gate.
+*/
+app.get("/api/boost-balance", (req, res) => {
+  /*
+    Advance race state first so the returned balance matches
+    the current backend race.
+  */
+  advanceCycleIfNeeded();
+
+  const wallet = String(req.query.wallet || "");
+  const cycle = getCurrentCycle();
+
+  /*
+    Validate wallet query param.
+  */
+  if (!isValidWallet(wallet)) {
+    return res.status(400).json({ error: "Invalid wallet" });
+  }
+
+  /*
+    Get this wallet's boost-token balance for the current race.
+  */
+  const balance = getBoostBalance(wallet, cycle.race_id);
+
+  /*
+    If the wallet has no confirmed bet/balance for this race,
+    return null rather than treating it as an error.
+  */
+  if (!balance) {
+    return res.json({
+      raceId: cycle.race_id,
+      wallet,
+      boostTokens: null
+    });
+  }
+
+  /*
+    Return granted/spent/remaining values for the HUD.
+  */
+  return res.json({
+    raceId: cycle.race_id,
+    wallet,
+    boostTokens: {
+      granted: balance.tokens_granted,
+      spent: balance.tokens_spent,
+      remaining: balance.tokens_granted - balance.tokens_spent,
+      status: balance.status
+    }
+  });
+});
+
+/*
+  GET /api/boost-power/current
+
+  Returns live boost-power percentages for the race HUD.
+
+  For now this is a placeholder because the car backend will eventually
+  calculate real boost power using:
+  - repeated boost wins
+  - current race position
+  - rubber-banding logic
+
+  The website/backend should display these values,
+  but the car backend should own the real racing effect.
+*/
+app.get("/api/boost-power/current", (req, res) => {
+  /*
+    Advance race state first so the response matches the current cycle.
+  */
+  advanceCycleIfNeeded();
+  const cycle = getCurrentCycle();
+
+  /*
+    Temporary placeholder values.
+
+    Later, replace these with real values submitted by or fetched from
+    the car/race backend.
+  */
+  return res.json({
+    raceId: cycle.race_id,
+    cycleId: cycle.id,
+    cycleNumber: cycle.cycle_number,
+    state: cycle.state,
+    boostPower: [
+      { carId: "Car 1", percent: 100 },
+      { carId: "Car 2", percent: 100 },
+      { carId: "Car 3", percent: 100 }
+    ]
   });
 });
 
