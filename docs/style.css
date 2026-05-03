@@ -1278,13 +1278,3 @@ body {
 .hidden {
     display: none;
 }
-
-/* ============================================================
-   LEGACY PER-CAR BET CONTROLS
-   ============================================================
-   These are hidden now that the central Race Bet Panel is the main
-   betting UI.
-
-   We are hiding them rather than deleting them immediately so we can
-   safely roll back if needed during testing.
-*/

@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-// const API_BASE = "http://localhost:3001/api";
+const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -572,12 +572,17 @@ function updateTrifectaPreview() {
   It only updates the UI based on selected bet type/stake/selection.
 */
 function updateRaceBetPanel() {
-  /*
-    Lock the Race Bet Panel once a bet is confirmed for this race.
-  */
   const isBetLockedForRace =
     Boolean(currentBetDetails && currentBetStatus === "confirmed");
-  
+
+  const multiplier = getDisplayPayoutMultiplier();
+  const potentialPayout = selectedStakeAmount * multiplier;
+
+  const hasValidSelection =
+    selectedBetType === "winner"
+      ? Boolean(selectedWinnerCarId)
+      : isSelectedTrifectaValid();
+
   if (raceBetPanel) {
     raceBetPanel.classList.toggle("bet-panel-locked", isBetLockedForRace);
   }
@@ -587,6 +592,7 @@ function updateRaceBetPanel() {
       "active",
       button.dataset.betType === selectedBetType
     );
+
     button.disabled = isBetLockedForRace;
   });
 
@@ -595,6 +601,7 @@ function updateRaceBetPanel() {
       "active",
       Number(button.dataset.stake) === selectedStakeAmount
     );
+
     button.disabled = isBetLockedForRace;
   });
 
@@ -603,54 +610,13 @@ function updateRaceBetPanel() {
       "active",
       button.dataset.car === selectedWinnerCarId
     );
+
     button.disabled = isBetLockedForRace;
   });
 
   if (trifectaFirstSelect) trifectaFirstSelect.disabled = isBetLockedForRace;
   if (trifectaSecondSelect) trifectaSecondSelect.disabled = isBetLockedForRace;
   if (trifectaThirdSelect) trifectaThirdSelect.disabled = isBetLockedForRace;
-
-  if (placeBetBtn) {
-    const hasValidSelection =
-      selectedBetType === "winner"
-        ? Boolean(selectedWinnerCarId)
-        : isSelectedTrifectaValid();
-
-    placeBetBtn.disabled = isBetLockedForRace || !hasValidSelection;
-
-    if (isBetLockedForRace) {
-      placeBetBtn.textContent = "Bet Locked for This Race";
-    } else {
-      placeBetBtn.textContent =
-        selectedBetType === "winner"
-          ? "Place Winner Bet"
-          : "Place Trifecta Bet";
-    }
-  }
-
-  const multiplier = getDisplayPayoutMultiplier();
-  const potentialPayout = selectedStakeAmount * multiplier;
-
-  betTypeButtons.forEach((button) => {
-    button.classList.toggle(
-      "active",
-      button.dataset.betType === selectedBetType
-    );
-  });
-
-  stakeButtons.forEach((button) => {
-    button.classList.toggle(
-      "active",
-      Number(button.dataset.stake) === selectedStakeAmount
-    );
-  });
-
-  winnerCarButtons.forEach((button) => {
-    button.classList.toggle(
-      "active",
-      button.dataset.car === selectedWinnerCarId
-    );
-  });
 
   if (winnerSelectionPanel) {
     winnerSelectionPanel.classList.toggle(
@@ -679,21 +645,13 @@ function updateRaceBetPanel() {
   }
 
   if (placeBetBtn) {
-    const hasValidSelection =
-      selectedBetType === "winner"
-        ? Boolean(selectedWinnerCarId)
-        : isSelectedTrifectaValid();
-
     placeBetBtn.disabled = isBetLockedForRace || !hasValidSelection;
 
-    if (isBetLockedForRace) {
-      placeBetBtn.textContent = "Bet Locked for This Race";
-    } else {
-      placeBetBtn.textContent =
-        selectedBetType === "winner"
-          ? "Place Winner Bet"
-          : "Place Trifecta Bet";
-    }
+    placeBetBtn.textContent = isBetLockedForRace
+      ? "Bet Locked for This Race"
+      : selectedBetType === "winner"
+        ? "Place Winner Bet"
+        : "Place Trifecta Bet";
   }
 
   updateTrifectaSelectOptions();

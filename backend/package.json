@@ -6,6 +6,9 @@
     "scripts": {
         "start": "node server.js"
     },
+    "engines": {
+        "node": ">=20.18.0"
+    },
     "dependencies": {
         "@solana/web3.js": "^1.98.4",
         "better-sqlite3": "^11.0.0",

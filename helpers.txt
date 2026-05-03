@@ -1,4 +1,4 @@
-Total lines of code = 7201
+Total lines of code = 7691
 
 http://localhost:3001/api/bet/latest-settled?wallet=7D5LJKQA4MwhEdPT4ZthmhrmHdymvK4uMqBQJfucUtcf
 
@@ -57,7 +57,7 @@ git clean -fd
 
 git status
 git add .
-git commit -m "Varied bets, boost button tokens & UI"
+git commit -m "New betting UI"
 git push origin devnet-mode
 
 exists on Devnet
