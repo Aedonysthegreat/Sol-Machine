@@ -14,6 +14,29 @@ const API_BASE = "https://sol-machine-production.up.railway.app/api";
 // Local demo backend
 // const API_BASE = "http://localhost:3001/api";
 
+function showDebugApiBase() {
+  const existing = document.getElementById("debugApiBase");
+  if (existing) existing.remove();
+
+  const label = document.createElement("div");
+  label.id = "debugApiBase";
+  label.textContent = `API: ${API_BASE}`;
+  label.style.position = "fixed";
+  label.style.left = "8px";
+  label.style.bottom = "8px";
+  label.style.zIndex = "99999";
+  label.style.padding = "6px 8px";
+  label.style.fontSize = "11px";
+  label.style.background = "rgba(0,0,0,0.88)";
+  label.style.color = "#00F0FF";
+  label.style.border = "1px solid #00F0FF";
+  label.style.borderRadius = "6px";
+  label.style.maxWidth = "90vw";
+  label.style.wordBreak = "break-all";
+
+  document.body.appendChild(label);
+}
+
 /*
   ============================================================
   APP CONFIG STATE
@@ -3080,6 +3103,8 @@ function startBackendPolling() {
 async function initApp() {
   try {
     await fetchAppConfig();
+
+    showDebugApiBase();
 
     updateWalletButton();
 
