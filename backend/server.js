@@ -8,6 +8,7 @@ import {
   LAMPORTS_PER_SOL
 } from "@solana/web3.js";
 import db from "./db.js";
+import { fetchFakeRaceResult } from "./fakeCarBackend.js";
 
 /*
   ------------------------------------------------------------
@@ -32,7 +33,7 @@ const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5500";
 // Optional admin token.
 // If this is set, the reset endpoint requires it.
 // If not set and you are in development, reset remains easy to use.
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+// const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 
 // Demo mode keeps your current mock flow working.
 // When DEMO_MODE is true, vote verification is stubbed and always passes.
@@ -143,6 +144,135 @@ const INTENT_EXPIRY_MS = 2 * 60 * 1000;
 */
 
 const ALLOWED_CARS = new Set(["Car 1", "Car 2", "Car 3"]);
+
+/*
+  ------------------------------------------------------------
+  FAKE CAR BACKEND HELPERS
+  ------------------------------------------------------------
+*/
+
+/*
+  Returns true if a bet won based on the submitted race result.
+
+  Winner bet:
+  - wins if selected car matches winning car
+
+  Trifecta bet:
+  - wins only if exact finishing order matches
+*/
+function didBetWinRace(bet, raceResult) {
+  if (!bet || !raceResult) return false;
+
+  if (bet.bet_type === "winner") {
+    return bet.car_id === raceResult.winningCarId;
+  }
+
+  if (bet.bet_type === "trifecta") {
+    return (
+      bet.trifecta_first_car_id === raceResult.firstCarId &&
+      bet.trifecta_second_car_id === raceResult.secondCarId &&
+      bet.trifecta_third_car_id === raceResult.thirdCarId
+    );
+  }
+
+  return false;
+}
+
+/*
+  Records the race result and settles all confirmed bets for that race.
+
+  This is the function you can later reuse when the real car backend
+  sends the official finishing order.
+*/
+const recordRaceResultAndSettleBetsTx = db.transaction((raceResult) => {
+  const now = nowIso();
+
+  /*
+    Store official result for this race.
+
+    INSERT OR REPLACE lets you re-run the fake result during testing,
+    but for production you may want stricter one-time-only behaviour.
+  */
+  db.prepare(`
+    INSERT OR REPLACE INTO race_results (
+      race_id,
+      winning_car_id,
+      first_car_id,
+      second_car_id,
+      third_car_id,
+      status,
+      source,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    raceResult.raceId,
+    raceResult.winningCarId,
+    raceResult.firstCarId,
+    raceResult.secondCarId,
+    raceResult.thirdCarId,
+    raceResult.status,
+    raceResult.source,
+    now
+  );
+
+  /*
+    Get all confirmed bets for this race.
+  */
+  const confirmedBets = db.prepare(`
+    SELECT *
+    FROM bets
+    WHERE race_id = ?
+      AND status = 'confirmed'
+  `).all(raceResult.raceId);
+
+  let settledCount = 0;
+  let wonCount = 0;
+  let lostCount = 0;
+
+  confirmedBets.forEach((bet) => {
+    const won = didBetWinRace(bet, raceResult);
+    const nextStatus = won ? "won" : "lost";
+
+    db.prepare(`
+      UPDATE bets
+      SET status = ?,
+          settled_at = ?
+      WHERE id = ?
+    `).run(nextStatus, now, bet.id);
+
+    settledCount += 1;
+
+    if (won) {
+      wonCount += 1;
+    } else {
+      lostCount += 1;
+    }
+  });
+
+  /*
+    Expire boost balances for the race.
+
+    These are race-only native website tokens, so once the race result
+    is submitted they should no longer be active.
+  */
+  db.prepare(`
+    UPDATE race_boost_balances
+    SET status = 'expired',
+        updated_at = ?
+    WHERE race_id = ?
+      AND status IN ('reserved', 'active')
+  `).run(now, raceResult.raceId);
+
+  return {
+    raceResult,
+    settlement: {
+      settledCount,
+      wonCount,
+      lostCount
+    }
+  };
+});
 
 /*
   ------------------------------------------------------------
@@ -1569,6 +1699,63 @@ setInterval(() => {
 
 // Make sure there is an initial idle cycle in the database when the app starts.
 seedInitialCycleIfNeeded();
+
+/*
+  ============================================================
+  DEV / TEST ROUTE
+  ============================================================
+
+  POST /api/dev/mock-race-result
+
+  Pulls a fake finishing order from fakeCarBackend.js and settles bets.
+
+  This is temporary and should not be publicly usable in production.
+*/
+
+app.post("/api/dev/mock-race-result", async (req, res) => {
+
+  /* FOR RAILWAY 
+  const adminToken = req.header("x-admin-token");
+
+  if (!ADMIN_TOKEN || adminToken !== ADMIN_TOKEN) {
+    return res.status(401).json({
+      error: "Unauthorized"
+    });
+  }
+  */
+
+  try {
+    advanceCycleIfNeeded();
+
+    const cycle = getCurrentCycle();
+
+    /*
+      Current race ID comes from backend state.
+    */
+    const raceId = cycle.race_id;
+
+    /*
+      Pretend we are calling another backend.
+    */
+    const raceResult = await fetchFakeRaceResult(raceId);
+
+    /*
+      Record result and settle bets.
+    */
+    const settled = recordRaceResultAndSettleBetsTx(raceResult);
+
+    return res.json({
+      success: true,
+      ...settled
+    });
+  } catch (error) {
+    console.error("Mock race result failed:", error);
+
+    return res.status(500).json({
+      error: error.message || "Failed to generate mock race result"
+    });
+  }
+});
 
 /*
   ------------------------------------------------------------
