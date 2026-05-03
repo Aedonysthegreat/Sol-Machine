@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-// const API_BASE = "http://localhost:3001/api";
+const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -118,9 +118,8 @@ const connectWalletBtn = document.getElementById("connectWalletBtn");
 // Button to start a 20 second delay before race starts
 const startRaceBtn = document.getElementById("startRaceBtn");
 
-// Car selects and boost buttons.
+// Boost buttons.
 // These are queried once on load because the page structure is static.
-const carSelects = document.querySelectorAll(".car-select");
 const boostButtons = document.querySelectorAll(".boost-btn");
 
 /*
@@ -384,6 +383,70 @@ let connectedWalletBalance = null;
 */
 
 /*
+  Smoothly scrolls to the race HUD with a buffer for the sticky top bar.
+
+  Why not scrollIntoView?
+  - scrollIntoView places the HUD right at the top of the viewport
+  - your sticky top bar can cover the top of the HUD cards
+
+  This version:
+  - scrolls slightly above the HUD
+  - uses easing so it slows smoothly at the end
+*/
+function scrollToRaceHud() {
+  const hud = document.querySelector(".bet-hud");
+
+  if (!hud) return;
+
+  const topBar = document.querySelector(".top-bar");
+
+  /*
+    Adjust these two numbers to tune the final scroll position.
+    Increase extraBuffer if the HUD is still too close to the top bar.
+  */
+  const topBarHeight = topBar ? topBar.offsetHeight : 0;
+  const extraBuffer = 30;
+
+  const targetY =
+    window.scrollY +
+    hud.getBoundingClientRect().top -
+    topBarHeight -
+    extraBuffer;
+
+  smoothScrollTo(targetY, 950);
+}
+
+/*
+  Smooth scroll helper with ease-out motion.
+
+  durationMs controls how long the scroll takes.
+  Higher = slower.
+*/
+function smoothScrollTo(targetY, durationMs = 850) {
+  const startY = window.scrollY;
+  const distance = targetY - startY;
+  const startTime = performance.now();
+
+  function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  function step(currentTime) {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(elapsed / durationMs, 1);
+    const easedProgress = easeOutCubic(progress);
+
+    window.scrollTo(0, startY + distance * easedProgress);
+
+    if (progress < 1) {
+      requestAnimationFrame(step);
+    }
+  }
+
+  requestAnimationFrame(step);
+}
+
+/*
   Adds/removes trifecta order badges on the car cards.
 */
 function updateTrifectaOrderBadges() {
@@ -514,6 +577,10 @@ function updateRaceBetPanel() {
   */
   const isBetLockedForRace =
     Boolean(currentBetDetails && currentBetStatus === "confirmed");
+  
+  if (raceBetPanel) {
+    raceBetPanel.classList.toggle("bet-panel-locked", isBetLockedForRace);
+  }
 
   betTypeButtons.forEach((button) => {
     button.classList.toggle(
@@ -617,12 +684,16 @@ function updateRaceBetPanel() {
         ? Boolean(selectedWinnerCarId)
         : isSelectedTrifectaValid();
 
-    placeBetBtn.disabled = !hasValidSelection;
+    placeBetBtn.disabled = isBetLockedForRace || !hasValidSelection;
 
-    placeBetBtn.textContent =
-      selectedBetType === "winner"
-        ? "Place Winner Bet"
-        : "Place Trifecta Bet";
+    if (isBetLockedForRace) {
+      placeBetBtn.textContent = "Bet Locked for This Race";
+    } else {
+      placeBetBtn.textContent =
+        selectedBetType === "winner"
+          ? "Place Winner Bet"
+          : "Place Trifecta Bet";
+    }
   }
 
   updateTrifectaSelectOptions();
@@ -726,7 +797,9 @@ lockedCarId = betType === "winner" ? primaryCarId : null;
   }
 
   updateHud();
+  updateBoostStrategyHud();
   applyCarSelectionUI();
+  updateRaceBetPanel();
   updateStartRaceButton();
 
   if (betType === "trifecta" && trifectaOrder) {
@@ -736,6 +809,11 @@ lockedCarId = betType === "winner" ? primaryCarId : null;
     boostTimer.textContent =
       `Bet submitted: ${stakeAmount} ${betIntent.tokenSymbol} on ${primaryCarId}`;
   }
+
+  /*
+    Once the bet is locked, move the user down to the race HUD.
+  */
+  scrollToRaceHud();
 }
 
 /*
@@ -874,7 +952,6 @@ function applyCarSelectionUI() {
     const carId = carCard.dataset.car;
     const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
-    const statsCard = carCard.querySelector(".stats-card");
 
     if (!button) return;
 
@@ -885,7 +962,6 @@ function applyCarSelectionUI() {
     if (!hasConfirmedBet) {
       carCard.classList.remove("hidden");
 
-      if (statsCard) statsCard.classList.remove("hidden");
       if (select) select.classList.add("hidden");
 
       button.classList.add("hidden");
@@ -924,7 +1000,6 @@ function applyCarSelectionUI() {
       Hide old dropdown betting controls after a bet is confirmed.
     */
     if (select) select.classList.add("hidden");
-    if (statsCard) statsCard.classList.add("hidden");
 
     /*
       Idle:
@@ -976,7 +1051,6 @@ function applyCarSelectionUI() {
   What it restores:
   - removes the enlarged single-car layout
   - shows all car cards again
-  - shows each stats panel again
   - shows each bet dropdown again
   - hides all Boost buttons
   - resets button state and text
@@ -993,12 +1067,6 @@ function renderIdleUI() {
 
     const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
-    const statsCard = carCard.querySelector(".stats-card");
-
-    // Show the stats panel again in idle mode.
-    if (statsCard) {
-      statsCard.classList.remove("hidden");
-    }
 
     // Show the dropdown again and reset it to the default option.
     if (select) {
@@ -1017,6 +1085,39 @@ function renderIdleUI() {
   updateStartRaceButton();
 
   boostTimer.textContent = "Select a car to start the race";
+}
+
+/*
+  resetRaceBetPanelForNextRace()
+
+  Resets and unlocks the central Race Bet Panel after a race is complete.
+
+  This allows the user to:
+  - choose Winner or Trifecta again
+  - choose a new stake
+  - choose a new winner car
+  - choose a new trifecta order
+*/
+function resetRaceBetPanelForNextRace() {
+  selectedBetType = "winner";
+  selectedStakeAmount = 1;
+  selectedWinnerCarId = null;
+
+  selectedTrifectaOrder = {
+    first: "",
+    second: "",
+    third: ""
+  };
+
+  if (trifectaFirstSelect) trifectaFirstSelect.value = "";
+  if (trifectaSecondSelect) trifectaSecondSelect.value = "";
+  if (trifectaThirdSelect) trifectaThirdSelect.value = "";
+
+  if (raceBetPanel) {
+    raceBetPanel.classList.remove("bet-panel-locked");
+  }
+
+  updateRaceBetPanel();
 }
 
 /*
@@ -2797,133 +2898,6 @@ placeBetBtn?.addEventListener("click", async () => {
     isSubmittingBet = false;
     updateRaceBetPanel();
   }
-});
-
-carSelects.forEach((select) => {
-  select.addEventListener("change", async () => {
-    const chosenValue = select.value;
-
-    if (chosenValue === "") return;
-
-    const chosenCarId = select.closest(".car-card")?.dataset.car;
-    if (!chosenCarId) return;
-
-    const stakeAmount = Number.parseInt(chosenValue, 10);
-
-    if (!Number.isInteger(stakeAmount) || ![1, 5, 10].includes(stakeAmount)) {
-      alert("Invalid bet amount selected");
-      select.value = "";
-      return;
-    }
-
-    try {
-
-      if (!hasInitialSync || currentState === null) {
-        await syncFromBackend();
-      }
-
-      if (currentState !== "idle" && currentState !== "starting") {
-        alert("Betting is closed for this race");
-        select.value = "";
-        return;
-      }
-
-      const activeWallet = getActiveWallet();
-
-      if (!activeWallet) {
-        /*
-          Important:
-          If we return here, we must not leave the UI half-locked.
-        */
-        alert("Connect your wallet before placing a bet.");
-        select.value = "";
-        renderIdleUI();
-        return;
-      }
-
-      /*
-        Bet is starting, but do NOT lock the selected car UI yet.
-
-        In devnet mode, the user still needs to approve the wallet transaction,
-        the transaction needs to confirm, and the backend needs to accept /bet-submit.
-
-        If we lock the UI before that, the frontend can look like the bet worked
-        even when the backend has no confirmed bet.
-      */
-      isSubmittingBet = true;
-
-      setBetPendingMessage("Preparing wallet confirmation...");
-
-      boostTimer.textContent =
-        appConfig.appMode === "devnet"
-          ? "Preparing wallet transaction..."
-          : "Submitting bet...";
-
-      const betIntent = await createBetIntent({
-        wallet: activeWallet,
-        betType: "winner",
-        carId: chosenCarId,
-        stakeAmount
-      });
-
-      currentBetId = betIntent.betId;
-
-      setBetPendingMessage("Waiting for wallet approval...");
-
-      boostTimer.textContent = "Waiting for wallet approval...";
-
-      const confirmedBet = await submitBet(
-        betIntent.betId,
-        activeWallet,
-        stakeAmount
-      );
-
-      await refreshWalletBalance();
-
-      /*
-        Only now is the bet actually confirmed.
-
-        This shared helper updates:
-        - current bet state
-        - locked selected car
-        - HUD
-        - boost token HUD
-        - Start Race button
-      */
-      applyConfirmedBetToFrontendState({
-        betIntent,
-        confirmedBet,
-        fallbackBetType: "winner",
-        fallbackCarId: chosenCarId,
-        fallbackTrifectaOrder: null,
-        stakeAmount
-      });
-
-      /*
-        Do not immediately sync here while debugging.
-        We want to preserve the confirmed selected-car UI first.
-      */
-    } catch (error) {
-      console.error("Bet flow failed:", error);
-
-      isSubmittingBet = false;
-      selectedCarId = null;
-      pendingRaceStartCarId = null;
-      lockedCarId = null;
-      currentBetId = null;
-      currentBetStatus = null;
-      currentBetDetails = null;
-
-      localStorage.removeItem("lockedCarId");
-
-      renderIdleUI();
-      updateHud();
-
-      boostTimer.textContent = "Bet was not confirmed. Please try again.";
-
-      alert(getFriendlyWalletErrorMessage(error));
-    }
-  });
 });
 
 /*

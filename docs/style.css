@@ -368,47 +368,9 @@ body {
 }
 
 /* ============================================================
-   STATS / SELECT / BOOST AREA
+    BOOST AREA
    ============================================================
 */
-.stats-card {
-    width: 100%;
-    padding: 12px;
-    margin-top: 6px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-}
-
-.stats-title {
-    font-size: 1rem;
-    margin-bottom: 10px;
-}
-
-/*
-  Dropdown for selecting boost amount / backing the car.
-*/
-.bet-select {
-    font-family: 'Rajdhani', sans-serif;
-    width: 145px;
-    padding: 8px 12px;
-    font-size: 1rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--card);
-    color: var(--text);
-    margin-bottom: 10px;
-    outline: none;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-/* Neon focus treatment */
-.bet-select:focus {
-    border-color: #00F0FF;
-    box-shadow:
-        0 0 4px #00F0FF,
-        0 0 10px rgba(0, 240, 255, 0.25);
-}
 
 /* Initial boost button rule */
 .boost-btn {
@@ -471,8 +433,7 @@ body {
 /* Smooth transition when the layout changes */
 .cars-grid,
 .car-card,
-.car-image,
-.stats-card {
+.car-image {
     transition:
         grid-template-columns 0.3s ease,
         width 0.3s ease,
@@ -514,12 +475,6 @@ body {
 .cars-grid.single-car-view .car-card:not(.hidden) .placeholder-box svg {
     width: 96px;
     height: 96px;
-}
-
-/* Keep the stats panel tidy under the larger window */
-.cars-grid.single-car-view .car-card:not(.hidden) .stats-card {
-    max-width: 420px;
-    margin: 0 auto;
 }
 
 @media (max-width: 900px) {
@@ -716,6 +671,25 @@ body {
   BET / RESULT HUD
   ============================================================
 */
+
+.hud-title,
+.hud-label,
+.hud-value,
+.hud-status {
+    font-family: 'Orbitron', sans-serif;
+}
+
+.hud-title {
+    font-weight: 600;
+}
+
+.hud-label {
+    font-size: 0.72rem;
+}
+
+.hud-value {
+    font-size: 0.82rem;
+}
 
 .bet-hud {
     width: min(1180px, calc(100% - 32px));
@@ -1104,6 +1078,124 @@ body {
 }
 
 /* ============================================================
+   BOOST STRATEGY STRIP
+   ============================================================ */
+
+.boost-strategy-strip {
+    width: min(1180px, calc(100% - 32px));
+    margin: 0 auto 18px;
+    padding: 12px 14px;
+    border: 1px solid rgba(0, 240, 255, 0.32);
+    border-radius: 14px;
+    background:
+        linear-gradient(180deg, rgba(26, 29, 33, 0.94), rgba(17, 19, 21, 0.94));
+    box-shadow:
+        0 0 8px rgba(0, 240, 255, 0.14),
+        0 0 20px rgba(196, 77, 255, 0.08);
+}
+
+.boost-strip-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 10px;
+}
+
+.boost-strip-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.95rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-shadow:
+        0 0 4px rgba(0, 240, 255, 0.55),
+        0 0 12px rgba(0, 240, 255, 0.18);
+}
+
+.boost-strip-subtitle {
+    color: rgba(242, 245, 247, 0.62);
+    font-size: 0.92rem;
+    text-align: right;
+}
+
+.boost-strip-grid {
+    display: grid;
+    grid-template-columns: 1.2fr repeat(3, 1fr);
+    gap: 10px;
+}
+
+.boost-strip-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 11px;
+    border-radius: 10px;
+    border: 1px solid rgba(62, 70, 75, 0.88);
+    background: rgba(47, 52, 55, 0.56);
+}
+
+.boost-strip-item span {
+    color: rgba(242, 245, 247, 0.62);
+    font-size: 0.9rem;
+}
+
+.boost-strip-item strong {
+    font-family: 'Orbitron', sans-serif;
+    color: var(--accent);
+    text-shadow:
+        0 0 4px rgba(0, 240, 255, 0.42),
+        0 0 10px rgba(0, 240, 255, 0.14);
+}
+
+@media (max-width: 760px) {
+    .boost-strip-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .boost-strip-subtitle {
+        text-align: left;
+    }
+
+    .boost-strip-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+/* ============================================================
+   LOCKED RACE BET PANEL
+   ============================================================
+   Applied after a bet is confirmed for the current race.
+*/
+.race-bet-panel.bet-panel-locked {
+    opacity: 0.58;
+    filter: grayscale(0.25);
+    pointer-events: none;
+    position: relative;
+}
+
+.race-bet-panel.bet-panel-locked::after {
+    content: "Bet locked for this race";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Orbitron', sans-serif;
+    font-size: clamp(1rem, 2vw, 1.5rem);
+    color: var(--accent2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: rgba(17, 19, 21, 0.66);
+    border-radius: 14px;
+    text-shadow:
+        0 0 6px rgba(196, 77, 255, 0.85),
+        0 0 18px rgba(196, 77, 255, 0.35);
+}
+
+/* ============================================================
    RESPONSIVE
    ============================================================
 */
@@ -1196,8 +1288,3 @@ body {
    We are hiding them rather than deleting them immediately so we can
    safely roll back if needed during testing.
 */
-
-/* Hide old per-car betting UI now that the Race Bet Panel is live */
-.legacy-bet-controls {
-    display: none !important;
-}
