@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-// const API_BASE = "http://localhost:3001/api";
+const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -995,6 +995,47 @@ function applyCarSelectionUI() {
   carsGrid?.classList.toggle("single-car-view", visibleCards.length === 1);
 
   updateTrifectaOrderBadges();
+}
+
+/*
+  handleRaceChangeFromBackend()
+
+  Detects when the backend has moved to a new race.
+
+  This matters after automatic mock settlement:
+  - backend settles old race
+  - backend creates next idle race
+  - frontend must clear old confirmed bet state
+  - Race Bet Panel must unlock
+*/
+function handleRaceChangeFromBackend(newRaceId, newState) {
+  if (!newRaceId) return;
+
+  const hadPreviousRace = currentRaceId !== null;
+  const raceChanged = hadPreviousRace && currentRaceId !== newRaceId;
+
+  if (!raceChanged) return;
+
+  /*
+    If the backend has moved to a new idle race, the old race is over.
+    Clear current bet/boost UI so the user can place a new bet.
+  */
+  if (newState === "idle") {
+    resetRaceSelection();
+
+    currentBoostTokens = null;
+    votedCycleId = null;
+    submittingVoteCycleId = null;
+    isSubmittingVote = false;
+
+    localStorage.removeItem("lockedCarId");
+    localStorage.removeItem("votedCycleId");
+
+    updateHud();
+    updateBoostStrategyHud();
+    updateRaceBetPanel();
+    applyCarSelectionUI();
+  }
 }
 
 /*
