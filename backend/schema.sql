@@ -159,9 +159,22 @@ CREATE TABLE IF NOT EXISTS bets (
   payment_tx_signature TEXT UNIQUE,
   message_signature TEXT,
 
-  created_at TEXT NOT NULL,
-  settled_at TEXT,
-  refunded_at TEXT,
+    created_at TEXT NOT NULL,
+    settled_at TEXT,
+    refunded_at TEXT,
+
+    -- Payout tracking.
+    -- not_required = lost/refunded/no payout needed
+    -- pending      = bet won, payout still needs to be sent
+    -- paid         = payout transaction sent and confirmed
+    -- failed       = payout attempt failed
+    payout_status TEXT DEFAULT 'not_required' CHECK (
+      payout_status IN ('not_required', 'pending', 'paid', 'failed')
+    ),
+
+    payout_tx_signature TEXT,
+    payout_error TEXT,
+    paid_at TEXT,
 
   FOREIGN KEY (cycle_id) REFERENCES cycles(id),
 

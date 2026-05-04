@@ -5,25 +5,17 @@
 
   Temporary mock backend for testing race results and bet settlement.
 
-  This simulates the future external car/race backend.
+  Supports forced test outcomes via .env:
 
-  Later, this file can be replaced by:
-  - an HTTP request to the real car backend
-  - a webhook listener
-  - a message queue
-  - a database/event stream
+  FAKE_RACE_FORCE_STATUS=completed
+  FAKE_RACE_FORCE_STATUS=invalid
+  FAKE_RACE_FORCE_STATUS=cancelled
 
-  For now:
-  - it randomly shuffles Car 1, Car 2, Car 3
-  - returns full finishing order
-  - returns the winner as the first car
+  Leave it blank for normal random completed results.
 */
 
 const ALLOWED_CARS = ["Car 1", "Car 2", "Car 3"];
 
-/*
-  Randomly shuffles an array without mutating the original.
-*/
 function shuffleArray(items) {
   const shuffled = [...items];
 
@@ -38,19 +30,41 @@ function shuffleArray(items) {
   return shuffled;
 }
 
-/*
-  Simulates pulling a race result from another backend.
-
-  raceId is included so the function feels like a real backend call.
-
-  Most of the time:
-  - returns a completed race with full finishing order
-
-  Sometimes:
-  - returns an invalid race result
-  - this lets you test refund settlement logic
-*/
 export function fetchFakeRaceResult(raceId) {
+  const forcedStatus = process.env.FAKE_RACE_FORCE_STATUS || "";
+
+  /*
+    Force a refund scenario.
+
+    invalid/cancelled means:
+    - no winner
+    - no finishing order
+    - all confirmed bets should become refunded
+    - no payout is required
+  */
+  if (forcedStatus === "invalid" || forcedStatus === "cancelled") {
+    const result = {
+      raceId,
+      status: forcedStatus,
+      source: "fake-car-backend",
+
+      winningCarId: null,
+
+      firstCarId: null,
+      secondCarId: null,
+      thirdCarId: null,
+
+      finishingOrder: []
+    };
+
+    console.log("Fake car backend forced refund result:", result);
+
+    return result;
+  }
+
+  /*
+    Normal completed mock race.
+  */
   const finishingOrder = shuffleArray(ALLOWED_CARS);
 
   const result = {

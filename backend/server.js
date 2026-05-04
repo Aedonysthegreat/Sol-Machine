@@ -5,10 +5,15 @@ import { nanoid } from "nanoid";
 import {
   Connection,
   PublicKey,
+  Keypair,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
   LAMPORTS_PER_SOL
 } from "@solana/web3.js";
 import db from "./db.js";
 import { fetchFakeRaceResult } from "./fakeCarBackend.js";
+import bs58 from "bs58";
 
 /*
   ------------------------------------------------------------
@@ -126,6 +131,59 @@ function isValidPublicKeyString(value) {
     return true;
   } catch {
     return false;
+  }
+}
+
+const TREASURY_SECRET_KEY = process.env.TREASURY_SECRET_KEY || "";
+
+console.log("Treasury key debug:", {
+  exists: Boolean(TREASURY_SECRET_KEY),
+  startsWithBracket: TREASURY_SECRET_KEY.trim().startsWith("["),
+  length: TREASURY_SECRET_KEY.trim().length,
+  firstChar: TREASURY_SECRET_KEY.trim()[0],
+  lastChar: TREASURY_SECRET_KEY.trim().slice(-1)
+});
+
+function getTreasuryKeypair() {
+  if (!TREASURY_SECRET_KEY) {
+    throw new Error("TREASURY_SECRET_KEY is not configured");
+  }
+
+  const trimmedKey = TREASURY_SECRET_KEY.trim();
+
+  /*
+    Format 1:
+    JSON array, e.g.
+    [12,34,56,...]
+  */
+  if (trimmedKey.startsWith("[")) {
+    let secretKeyArray;
+
+    try {
+      secretKeyArray = JSON.parse(trimmedKey);
+    } catch {
+      throw new Error("TREASURY_SECRET_KEY JSON array could not be parsed");
+    }
+
+    if (!Array.isArray(secretKeyArray)) {
+      throw new Error("TREASURY_SECRET_KEY must be a JSON array");
+    }
+
+    return Keypair.fromSecretKey(Uint8Array.from(secretKeyArray));
+  }
+
+  /*
+    Format 2:
+    Base58 private key string, e.g.
+    4xQeVj5tqViQh7y...
+  */
+  try {
+    const secretKeyBytes = bs58.decode(trimmedKey);
+    return Keypair.fromSecretKey(secretKeyBytes);
+  } catch {
+    throw new Error(
+      "TREASURY_SECRET_KEY must be either a JSON array or a valid base58 private key"
+    );
   }
 }
 
@@ -255,6 +313,8 @@ const recordRaceResultAndSettleBetsTx = db.transaction((raceResult) => {
       db.prepare(`
         UPDATE bets
         SET status = ?,
+            payout_status = 'pending',
+            payout_error = NULL,
             refunded_at = ?
         WHERE id = ?
       `).run("refunded", now, bet.id);
@@ -271,13 +331,16 @@ const recordRaceResultAndSettleBetsTx = db.transaction((raceResult) => {
     */
     const won = didBetWinRace(bet, raceResult);
     const nextStatus = won ? "won" : "lost";
+    const payoutStatus = won ? "pending" : "not_required";
 
     db.prepare(`
       UPDATE bets
       SET status = ?,
+          payout_status = ?,
+          payout_error = NULL,
           settled_at = ?
       WHERE id = ?
-    `).run(nextStatus, now, bet.id);
+    `).run(nextStatus, payoutStatus, now, bet.id);
 
     settledCount += 1;
 
@@ -312,6 +375,114 @@ const recordRaceResultAndSettleBetsTx = db.transaction((raceResult) => {
     }
   };
 });
+
+async function sendDevnetSolPayout({ toWallet, payoutAmount }) {
+  if (APP_MODE !== "devnet") {
+    throw new Error("Payouts are only enabled in devnet mode for now");
+  }
+
+  if (!isValidPublicKeyString(toWallet)) {
+    throw new Error("Invalid payout wallet address");
+  }
+
+  const treasuryKeypair = getTreasuryKeypair();
+
+  if (treasuryKeypair.publicKey.toString() !== TREASURY_WALLET) {
+    throw new Error("TREASURY_SECRET_KEY does not match TREASURY_WALLET");
+  }
+
+  const toPubkey = new PublicKey(toWallet);
+
+  /*
+    potential_payout is stored in stake units.
+    Your devnet mapping is:
+      1 stake unit = 0.001 SOL
+  */
+  const lamports = stakeAmountToExpectedLamports(payoutAmount);
+
+  const tx = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: treasuryKeypair.publicKey,
+      toPubkey,
+      lamports
+    })
+  );
+
+  const signature = await sendAndConfirmTransaction(
+    solanaConnection,
+    tx,
+    [treasuryKeypair],
+    {
+      commitment: "confirmed"
+    }
+  );
+
+  return signature;
+}
+
+async function processPendingPayoutsForRace(raceId) {
+  const pendingPayouts = db.prepare(`
+    SELECT *
+    FROM bets
+    WHERE race_id = ?
+      AND status IN ('won', 'refunded')
+      AND payout_status = 'pending'
+  `).all(raceId);
+
+  const results = [];
+
+  for (const bet of pendingPayouts) {
+    try {
+      const amountToSend =
+        bet.status === "refunded"
+          ? bet.stake_amount
+          : bet.potential_payout;
+
+      const signature = await sendDevnetSolPayout({
+        toWallet: bet.wallet,
+        payoutAmount: amountToSend
+      });
+
+      db.prepare(`
+        UPDATE bets
+        SET payout_status = 'paid',
+            payout_tx_signature = ?,
+            payout_error = NULL,
+            paid_at = ?
+        WHERE id = ?
+      `).run(signature, nowIso(), bet.id);
+
+      results.push({
+        betId: bet.id,
+        wallet: bet.wallet,
+        status: "paid",
+        payoutTxSignature: signature
+      });
+    } catch (error) {
+      console.error("Payout failed:", error);
+
+      db.prepare(`
+        UPDATE bets
+        SET payout_status = 'failed',
+            payout_error = ?
+        WHERE id = ?
+      `).run(error.message || "Payout failed", bet.id);
+
+      results.push({
+        betId: bet.id,
+        wallet: bet.wallet,
+        status: "failed",
+        error: error.message || "Payout failed"
+      });
+    }
+  }
+
+  return {
+    raceId,
+    processedCount: results.length,
+    results
+  };
+}
 
 /*
   ------------------------------------------------------------
@@ -525,6 +696,18 @@ function finishRaceWithFakeCarBackend(raceId) {
   const raceResult = fetchFakeRaceResult(raceId);
 
   const settled = recordRaceResultAndSettleBetsTx(raceResult);
+
+  /*
+    Send payouts asynchronously after settlement.
+
+    Important:
+    - settlement is database state
+    - payout is an external blockchain action
+    - we do not want a payout RPC failure to undo the race result
+  */
+  processPendingPayoutsForRace(raceId).catch((error) => {
+    console.error("Automatic payout processing failed:", error);
+  });
 
   const nextCycle = startNextIdleRaceAfterSettlement(raceId);
 
@@ -2692,6 +2875,10 @@ app.get("/api/bet/latest-settled", (req, res) => {
       b.created_at,
       b.settled_at,
       b.refunded_at,
+      b.payout_status,
+      b.payout_tx_signature,
+      b.payout_error,
+      b.paid_at,
 
       rr.winning_car_id,
       rr.first_car_id,
