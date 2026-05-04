@@ -230,6 +230,7 @@ const hudBetType = document.getElementById("hudBetType");
 
 // Current backend cycle info.
 let currentCycleId = null;
+let currentRaceId = null;
 let currentState = null;
 let currentWinnerCarId = null;
 let currentCycleEndsAt = null;
@@ -998,47 +999,6 @@ function applyCarSelectionUI() {
 }
 
 /*
-  handleRaceChangeFromBackend()
-
-  Detects when the backend has moved to a new race.
-
-  This matters after automatic mock settlement:
-  - backend settles old race
-  - backend creates next idle race
-  - frontend must clear old confirmed bet state
-  - Race Bet Panel must unlock
-*/
-function handleRaceChangeFromBackend(newRaceId, newState) {
-  if (!newRaceId) return;
-
-  const hadPreviousRace = currentRaceId !== null;
-  const raceChanged = hadPreviousRace && currentRaceId !== newRaceId;
-
-  if (!raceChanged) return;
-
-  /*
-    If the backend has moved to a new idle race, the old race is over.
-    Clear current bet/boost UI so the user can place a new bet.
-  */
-  if (newState === "idle") {
-    resetRaceSelection();
-
-    currentBoostTokens = null;
-    votedCycleId = null;
-    submittingVoteCycleId = null;
-    isSubmittingVote = false;
-
-    localStorage.removeItem("lockedCarId");
-    localStorage.removeItem("votedCycleId");
-
-    updateHud();
-    updateBoostStrategyHud();
-    updateRaceBetPanel();
-    applyCarSelectionUI();
-  }
-}
-
-/*
   renderIdleUI()
 
   Resets the car section back to its default pre-race / idle layout.
@@ -1631,43 +1591,6 @@ function formatBetTypeForHud(bet) {
 */
 function updateHud() {
   const activeWallet = getActiveWallet();
-
-/*
-  handleRaceChangeFromBackend()
-
-  Detects when the backend has moved to a new race.
-
-  This is important after automatic mock settlement:
-  - backend settles old race
-  - backend creates next idle race
-  - frontend must clear old confirmed bet state
-  - Race Bet Panel must unlock
-*/
-function handleRaceChangeFromBackend(newRaceId, newState) {
-  if (!newRaceId) return;
-
-  const hadPreviousRace = currentRaceId !== null;
-  const raceChanged = hadPreviousRace && currentRaceId !== newRaceId;
-
-  if (!raceChanged) return;
-
-  /*
-    If the backend has moved to a new idle race, the old race is over.
-    Clear current bet/boost UI so the user can place a new bet.
-  */
-  if (newState === "idle") {
-    resetRaceSelection();
-    resetRaceBetPanelForNextRace();
-
-    currentBoostTokens = null;
-    votedCycleId = null;
-    submittingVoteCycleId = null;
-    isSubmittingVote = false;
-
-    localStorage.removeItem("lockedCarId");
-    localStorage.removeItem("votedCycleId");
-  }
-}
 
   // ----------------------------------------------------------
   // SYSTEM PANEL
@@ -2414,10 +2337,48 @@ async function refreshHudData() {
   ============================================================
 */
 
+/*
+  handleRaceChangeFromBackend()
+
+  Detects when the backend has moved to a new race.
+
+  This matters after automatic mock settlement:
+  - backend settles old race
+  - backend creates next idle race
+  - frontend must clear old confirmed bet state
+  - Race Bet Panel must unlock
+*/
+function handleRaceChangeFromBackend(newRaceId, newState) {
+  if (!newRaceId) return;
+
+  const hadPreviousRace = currentRaceId !== null;
+  const raceChanged = hadPreviousRace && currentRaceId !== newRaceId;
+
+  if (!raceChanged) return;
+
+  if (newState === "idle") {
+    resetRaceSelection();
+
+    currentBoostTokens = null;
+    votedCycleId = null;
+    submittingVoteCycleId = null;
+    isSubmittingVote = false;
+
+    localStorage.removeItem("lockedCarId");
+    localStorage.removeItem("votedCycleId");
+
+    updateHud();
+    updateBoostStrategyHud();
+    updateRaceBetPanel();
+    applyCarSelectionUI();
+  }
+}
+
 function applyCycleFromBackend(cycle) {
   previousState = currentState;
 
   currentCycleId = cycle.id;
+  currentRaceId = cycle.raceId ?? cycle.race_id ?? null;
   currentState = cycle.state;
   currentWinnerCarId = cycle.winnerCarId ?? cycle.winner_car_id ?? null;
   currentCycleEndsAt = cycle.endsAt ?? cycle.ends_at ?? null;
