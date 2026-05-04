@@ -354,12 +354,48 @@ function getPayoutMultiplierForBetType(betType) {
   ------------------------------------------------------------
 */
 
-// CORS:
-// - In development: allow any origin for convenience.
-// - In production: only allow your known frontend origin.
+/*
+  FRONTEND_ORIGINS is a comma-separated allow-list.
+
+  Example .env:
+  FRONTEND_ORIGINS=https://your-github-pages-url,http://localhost:5500,http://127.0.0.1:5500
+*/
+const FRONTEND_ORIGINS = (
+  process.env.FRONTEND_ORIGINS ||
+  process.env.FRONTEND_ORIGIN ||
+  "http://localhost:5500,http://127.0.0.1:5500"
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: NODE_ENV === "development" ? true : [FRONTEND_ORIGIN],
+    origin(origin, callback) {
+      /*
+        Allow requests with no Origin header.
+        This covers curl, PowerShell, health checks, and server-to-server calls.
+      */
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      /*
+        In local development, allow all browser origins.
+      */
+      if (NODE_ENV === "development") {
+        return callback(null, true);
+      }
+
+      /*
+        In production, only allow listed frontend origins.
+      */
+      if (FRONTEND_ORIGINS.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked origin: ${origin}`));
+    },
     methods: ["GET", "POST"],
     credentials: false
   })
@@ -368,14 +404,6 @@ app.use(
 // JSON body parser with a small size limit.
 // This helps avoid people sending huge payloads.
 app.use(express.json({ limit: "32kb" }));
-
-app.get("/", (req, res) => {
-  res.status(200).json({ ok: true, message: "Sol Machine backend is running" });
-});
-
-app.get("/healthz", (req, res) => {
-  res.status(200).json({ ok: true });
-});
 
 /*
   ------------------------------------------------------------
