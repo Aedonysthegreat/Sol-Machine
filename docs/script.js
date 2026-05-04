@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-// const API_BASE = "https://sol-machine-production.up.railway.app/api";
+const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-const API_BASE = "http://localhost:3001/api";
+// const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -155,6 +155,7 @@ const hudBetStatus = document.getElementById("hudBetStatus");
 const hudResultRaceId = document.getElementById("hudResultRaceId");
 const hudRaceOutcome = document.getElementById("hudRaceOutcome");
 const hudWinningCar = document.getElementById("hudWinningCar");
+const hudFinishOrder = document.getElementById("hudFinishOrder");
 const hudYourResult = document.getElementById("hudYourResult");
 const hudSettlement = document.getElementById("hudSettlement");
 
@@ -1533,6 +1534,24 @@ function formatSettlementValue(bet) {
 }
 
 /*
+  Formats the official finishing order from the race result.
+
+  Example:
+    Car 2 → Car 3 → Car 1
+*/
+function formatFinishOrderForHud(bet) {
+  if (!bet) return "—";
+
+  const order = [
+    bet.first_car_id,
+    bet.second_car_id,
+    bet.third_car_id
+  ].filter(Boolean);
+
+  return order.length ? order.join(" → ") : "—";
+}
+
+/*
   Formats the current bet selection for the HUD.
 
   Winner example:
@@ -1657,6 +1676,11 @@ if (hudSelectedCar) {
       hudWinningCar.textContent = latestSettledBetDetails.winning_car_id || "—";
     }
 
+    if (hudFinishOrder) {
+      hudFinishOrder.textContent =
+        formatFinishOrderForHud(latestSettledBetDetails);
+    }
+
     setHudStatus(hudYourResult, latestSettledBetDetails.status);
 
     if (hudSettlement) {
@@ -1666,6 +1690,7 @@ if (hudSelectedCar) {
     if (hudResultRaceId) hudResultRaceId.textContent = "—";
     if (hudRaceOutcome) hudRaceOutcome.textContent = "—";
     if (hudWinningCar) hudWinningCar.textContent = "—";
+    if (hudFinishOrder) hudFinishOrder.textContent = "—";
     setHudStatus(hudYourResult, null);
     if (hudSettlement) hudSettlement.textContent = "—";
   }

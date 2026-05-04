@@ -384,6 +384,36 @@ function startIdleRace(raceId) {
   `).run(raceId, 0, "idle", now, now, null);
 }
 
+/*
+  Starts the next idle race after a race has been settled.
+
+  This is useful for mock/dev settlement because the fake car backend
+  can finish the race immediately, before the normal cycle timer reaches
+  the end of all boost cycles.
+
+  It only creates a new idle race if the latest cycle still belongs to
+  the race that was just settled.
+*/
+function startNextIdleRaceAfterSettlement(settledRaceId) {
+  const currentCycle = getCurrentCycle();
+
+  if (!currentCycle) {
+    startIdleRace(settledRaceId + 1);
+    return getCurrentCycle();
+  }
+
+  /*
+    If the app has already moved beyond this race, do not create another
+    idle race. This prevents duplicate race jumps.
+  */
+  if (currentCycle.race_id !== settledRaceId) {
+    return currentCycle;
+  }
+
+  startIdleRace(settledRaceId + 1);
+  return getCurrentCycle();
+}
+
 // Creates a voting cycle for a given race and cycle number.
 function startVotingCycle(raceId, cycleNumber) {
   const startedAt = new Date();
@@ -1713,40 +1743,63 @@ seedInitialCycleIfNeeded();
 */
 
 app.post("/api/dev/mock-race-result", async (req, res) => {
-
-  /* FOR RAILWAY 
-  const adminToken = req.header("x-admin-token");
-
-  if (!ADMIN_TOKEN || adminToken !== ADMIN_TOKEN) {
-    return res.status(401).json({
-      error: "Unauthorized"
-    });
-  }
-  */
-
   try {
     advanceCycleIfNeeded();
 
     const cycle = getCurrentCycle();
 
+    if (!cycle) {
+      return res.status(400).json({
+        error: "No current race found"
+      });
+    }
+
     /*
-      Current race ID comes from backend state.
+      Do not allow mock results while the race is still idle.
+
+      A confirmed bet can exist during idle, but the race has not actually run.
+      Settlement should only happen after Start Race has been pressed.
     */
+    if (cycle.state === "idle") {
+      return res.status(400).json({
+        error: "Cannot generate a race result before the race has started"
+      });
+    }
+
     const raceId = cycle.race_id;
 
     /*
-      Pretend we are calling another backend.
+      Make sure there is at least one confirmed bet for this race.
+      If this is false, the mock result would settle zero bets.
+    */
+    if (!raceHasConfirmedBet(raceId)) {
+      return res.status(400).json({
+        error: `No confirmed bets found for race ${raceId}`
+      });
+    }
+
+    /*
+      Pretend we are pulling this from the external car backend.
     */
     const raceResult = await fetchFakeRaceResult(raceId);
 
     /*
-      Record result and settle bets.
+      Record result, settle bets, and expire boost balances.
     */
     const settled = recordRaceResultAndSettleBetsTx(raceResult);
 
+    /*
+      After settlement, move the backend into the next idle race.
+
+      This prevents the app getting stuck in a started/voting/boost race
+      after the fake car backend has already declared a final result.
+    */
+    const nextCycle = startNextIdleRaceAfterSettlement(raceId);
+
     return res.json({
       success: true,
-      ...settled
+      ...settled,
+      nextCycle: serializeCycle(nextCycle)
     });
   } catch (error) {
     console.error("Mock race result failed:", error);
@@ -2469,7 +2522,13 @@ app.get("/api/bet/latest-settled", (req, res) => {
       b.race_id,
       b.cycle_id,
       b.wallet,
+
+      b.bet_type,
       b.car_id,
+      b.trifecta_first_car_id,
+      b.trifecta_second_car_id,
+      b.trifecta_third_car_id,
+
       b.token_symbol,
       b.stake_amount,
       b.payout_multiplier,
@@ -2480,10 +2539,15 @@ app.get("/api/bet/latest-settled", (req, res) => {
       b.created_at,
       b.settled_at,
       b.refunded_at,
+
       rr.winning_car_id,
+      rr.first_car_id,
+      rr.second_car_id,
+      rr.third_car_id,
       rr.status AS race_result_status,
       rr.source AS race_result_source,
       rr.created_at AS race_result_created_at
+
     FROM bets b
     LEFT JOIN race_results rr
       ON rr.race_id = b.race_id
@@ -2492,7 +2556,7 @@ app.get("/api/bet/latest-settled", (req, res) => {
     ORDER BY
       COALESCE(b.settled_at, b.refunded_at, b.created_at) DESC
     LIMIT 1
-  `).get(wallet);
+`).get(wallet);
 
   return res.json({
     bet: bet || null
