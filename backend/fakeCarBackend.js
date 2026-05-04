@@ -42,13 +42,15 @@ function shuffleArray(items) {
   Simulates pulling a race result from another backend.
 
   raceId is included so the function feels like a real backend call.
-*/
-export async function fetchFakeRaceResult(raceId) {
-  /*
-    Small artificial delay so it behaves more like an external request.
-  */
-  await new Promise((resolve) => setTimeout(resolve, 250));
 
+  Most of the time:
+  - returns a completed race with full finishing order
+
+  Sometimes:
+  - returns an invalid race result
+  - this lets you test refund settlement logic
+*/
+export function fetchFakeRaceResult(raceId) {
   const finishingOrder = shuffleArray(ALLOWED_CARS);
 
   const result = {

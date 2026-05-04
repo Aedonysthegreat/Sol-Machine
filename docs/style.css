@@ -43,7 +43,7 @@ body {
   Use the more futuristic Orbitron font for key UI elements
   so headings, timer text, and controls feel more branded.
 */
-.hero h1,
+
 .boost-timer,
 .wallet-btn,
 .boost-btn,
@@ -195,19 +195,25 @@ body {
    HERO
    ============================================================
 */
+
 .hero {
     text-align: center;
     margin-bottom: 48px;
 }
 
-.hero h1 {
-    font-size: clamp(2.4rem, 5vw, 4rem);
-    font-weight: 500;
-    margin-bottom: 10px;
+.site-logo {
+    display: block;
+    width: min(460px, 90%);
+    object-fit: contain;
+    height: auto;
+    margin: 0 auto 4px;
+    filter:
+        drop-shadow(0 0 4px rgba(0, 240, 255, 0.85)) drop-shadow(0 0 12px rgba(0, 240, 255, 0.45)) drop-shadow(0 0 22px rgba(196, 77, 255, 0.35)) drop-shadow(0 0 38px rgba(196, 77, 255, 0.22));
 }
 
 .hero p {
-    font-size: clamp(1.2rem, 2.2vw, 2rem);
+    font-size: clamp(1.1rem, 2vw, 1.6rem);
+    margin-top: 0;
 }
 
 /* ============================================================

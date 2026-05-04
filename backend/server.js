@@ -26,6 +26,21 @@ const PORT = Number(process.env.PORT || 3001);
 // NODE_ENV lets us behave differently in dev vs production.
 const NODE_ENV = process.env.NODE_ENV || "development";
 
+/*
+  AUTO_FAKE_RACE_RESULTS
+
+  Development helper.
+
+  When true:
+  - after the final boost cycle ends
+  - the backend automatically asks fakeCarBackend.js for a finishing order
+  - bets are settled
+  - the next idle race is created
+*/
+const AUTO_FAKE_RACE_RESULTS =
+  process.env.AUTO_FAKE_RACE_RESULTS === "true" ||
+  (NODE_ENV === "development" && process.env.AUTO_FAKE_RACE_RESULTS !== "false");
+
 // Allowed frontend origin for production CORS.
 // In development we allow broader access for convenience.
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5500";
@@ -33,7 +48,7 @@ const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5500";
 // Optional admin token.
 // If this is set, the reset endpoint requires it.
 // If not set and you are in development, reset remains easy to use.
-// const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 
 // Demo mode keeps your current mock flow working.
 // When DEMO_MODE is true, vote verification is stubbed and always passes.
@@ -229,8 +244,31 @@ const recordRaceResultAndSettleBetsTx = db.transaction((raceResult) => {
   let settledCount = 0;
   let wonCount = 0;
   let lostCount = 0;
+  let refundedCount = 0;
 
   confirmedBets.forEach((bet) => {
+    /*
+      If the race did not complete properly, do not mark bets as lost.
+      Refund them instead.
+    */
+    if (raceResult.status === "cancelled" || raceResult.status === "invalid") {
+      db.prepare(`
+        UPDATE bets
+        SET status = ?,
+            refunded_at = ?
+        WHERE id = ?
+      `).run("refunded", now, bet.id);
+
+      settledCount += 1;
+      refundedCount += 1;
+      return;
+    }
+
+    /*
+      Completed race:
+      - winner bets use winningCarId
+      - trifecta bets use exact finishing order
+    */
     const won = didBetWinRace(bet, raceResult);
     const nextStatus = won ? "won" : "lost";
 
@@ -269,7 +307,8 @@ const recordRaceResultAndSettleBetsTx = db.transaction((raceResult) => {
     settlement: {
       settledCount,
       wonCount,
-      lostCount
+      lostCount,
+      refundedCount
     }
   };
 });
@@ -414,6 +453,64 @@ function startNextIdleRaceAfterSettlement(settledRaceId) {
   return getCurrentCycle();
 }
 
+/*
+  finishRaceWithFakeCarBackend()
+
+  Called automatically after the final boost cycle ends during development.
+
+  It simulates the real car backend returning:
+  - winner
+  - full finishing order
+
+  Then it:
+  - records race result
+  - settles winner/trifecta bets
+  - expires boost tokens
+  - creates the next idle race
+*/
+function finishRaceWithFakeCarBackend(raceId) {
+  /*
+    Do not settle the same race twice.
+  */
+  if (isRaceAlreadySettled(raceId)) {
+    return {
+      skipped: true,
+      reason: "Race already settled",
+      raceId
+    };
+  }
+
+  /*
+    The race should normally have confirmed bets because /api/race/start
+    requires at least one confirmed bet.
+  */
+  if (!raceHasConfirmedBet(raceId)) {
+    startNextIdleRaceAfterSettlement(raceId);
+
+    return {
+      skipped: true,
+      reason: "No confirmed bets found",
+      raceId
+    };
+  }
+
+  const raceResult = fetchFakeRaceResult(raceId);
+
+  const settled = recordRaceResultAndSettleBetsTx(raceResult);
+
+  const nextCycle = startNextIdleRaceAfterSettlement(raceId);
+
+  console.log("Auto mock race settlement:", {
+    ...settled,
+    nextCycle: serializeCycle(nextCycle)
+  });
+
+  return {
+    ...settled,
+    nextCycle: serializeCycle(nextCycle)
+  };
+}
+
 // Creates a voting cycle for a given race and cycle number.
 function startVotingCycle(raceId, cycleNumber) {
   const startedAt = new Date();
@@ -455,20 +552,24 @@ function seedInitialCycleIfNeeded() {
 }
 
 /*
-  settleConfirmedBetsForRace()
+  TEMPORARY / LEGACY SETTLEMENT PATH
 
-  This is the later settlement step once a race has an official result.
+  This function only supports winner-style settlement because it checks:
+    bet.car_id === winningCarId
 
-  Logic:
-  - if the race completed normally:
-      winning-car bets -> won
-      all others        -> lost
-  - if the race is cancelled or invalid:
-      all confirmed bets -> refunded
+  It does NOT correctly settle trifecta bets.
 
-  This does NOT yet send real payouts/refunds.
-  It only updates backend bet state cleanly for v1.
+  Keep this only for older/manual admin testing.
+  The long-term settlement path should be:
+    recordRaceResultAndSettleBetsTx()
+
+  That newer path supports:
+    - winner bets
+    - exact trifecta order
+    - boost balance expiry
+    - future car-backend result integration
 */
+
 function settleConfirmedBetsForRace(raceId, winningCarId, raceResultState) {
   const bets = db.prepare(`
     SELECT * FROM bets
@@ -619,13 +720,37 @@ function advanceCycleIfNeeded() {
     return;
   }
 
-  // Boost ended -> either start the next voting cycle, or start a fresh idle race
+  // Boost ended -> either start the next voting cycle, or finish the race
   if (cycle.state === "boost") {
     if (cycle.cycle_number < CYCLES_PER_RACE) {
       startVotingCycle(cycle.race_id, cycle.cycle_number + 1);
-    } else {
-      startIdleRace(cycle.race_id + 1);
+      return;
     }
+
+    /*
+      Final boost cycle has ended.
+
+      Development/mock mode:
+      - automatically fetch a fake final finishing order
+      - record result
+      - settle bets
+      - move to next idle race
+
+      Future real mode:
+      - this is where the app will wait for or receive the real car backend result.
+    */
+    if (AUTO_FAKE_RACE_RESULTS) {
+      finishRaceWithFakeCarBackend(cycle.race_id);
+      return;
+    }
+
+    /*
+      Fallback behaviour if automatic mock results are disabled.
+
+      Later, once the real car backend exists, you may want a state like
+      "awaiting_result" here instead of immediately creating the next idle race.
+    */
+    startIdleRace(cycle.race_id + 1);
   }
 }
 
@@ -1742,7 +1867,7 @@ seedInitialCycleIfNeeded();
   This is temporary and should not be publicly usable in production.
 */
 
-app.post("/api/dev/mock-race-result", async (req, res) => {
+app.post("/api/dev/mock-race-result", requireAdmin, async (req, res) => {
   try {
     advanceCycleIfNeeded();
 

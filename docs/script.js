@@ -9,10 +9,10 @@
 // Base URL for your backend API.
 // This should point at your live backend, including the /api prefix,
 // because all backend routes are under /api/...
-const API_BASE = "https://sol-machine-production.up.railway.app/api";
+// const API_BASE = "https://sol-machine-production.up.railway.app/api";
 
 // Local demo backend
-// const API_BASE = "http://localhost:3001/api";
+const API_BASE = "http://localhost:3001/api";
 
 /*
   ============================================================
@@ -673,8 +673,8 @@ function updateRaceBetPanel() {
   - lockedCarId is the chosen winner
 
   For trifecta bets:
-  - lockedCarId is the first-place prediction for now
-  - later, when trifecta boost UI is added, we will show/enable all 3 boost buttons
+  - selectedCarId keeps the first-place prediction for reference
+  - lockedCarId remains null so all allowed trifecta cars can stay visible
 */
 function applyConfirmedBetToFrontendState({
   betIntent,
@@ -720,6 +720,9 @@ lockedCarId = betType === "winner" ? primaryCarId : null;
 
   if (lockedCarId) {
     localStorage.setItem("lockedCarId", lockedCarId);
+  }
+  else {
+    localStorage.removeItem("lockedCarId");
   }
 
   currentBetId = betIntent.betId;
@@ -909,7 +912,6 @@ function applyCarSelectionUI() {
 
   allCarCards.forEach((carCard) => {
     const carId = carCard.dataset.car;
-    const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
 
     if (!button) return;
@@ -920,8 +922,6 @@ function applyCarSelectionUI() {
     */
     if (!hasConfirmedBet) {
       carCard.classList.remove("hidden");
-
-      if (select) select.classList.add("hidden");
 
       button.classList.add("hidden");
       button.disabled = false;
@@ -954,11 +954,6 @@ function applyCarSelectionUI() {
         carCard.classList.add("hidden");
       }
     }
-
-    /*
-      Hide old dropdown betting controls after a bet is confirmed.
-    */
-    if (select) select.classList.add("hidden");
 
     /*
       Idle:
@@ -1010,7 +1005,6 @@ function applyCarSelectionUI() {
   What it restores:
   - removes the enlarged single-car layout
   - shows all car cards again
-  - shows each bet dropdown again
   - hides all Boost buttons
   - resets button state and text
 
@@ -1024,14 +1018,7 @@ function renderIdleUI() {
   document.querySelectorAll(".car-card").forEach((carCard) => {
     carCard.classList.remove("hidden");
 
-    const select = carCard.querySelector(".car-select");
     const button = carCard.querySelector(".boost-btn");
-
-    // Show the dropdown again and reset it to the default option.
-    if (select) {
-      select.classList.remove("hidden");
-      select.value = "";
-    }
 
     // Hide the Boost button and reset its state.
     if (button) {
